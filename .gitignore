@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# DSSAT data / caches that must never be committed to a code package
+*.WTH
+*.SOL
+*_cache/
+*_netcdf_cache/
+SoilGrids/
+results/
+soil_cache/
+weather_cache/
+
+# OS
+.DS_Store

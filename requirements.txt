@@ -1,0 +1,34 @@
+# Python dependencies for the DSSAT gridded pipeline (Python port + HPC MPI runner).
+#
+# Install (local / workstation):
+#   pip install -r requirements.txt
+#
+# On HPC, build mpi4py against the cluster MPI AFTER loading the MPI module:
+#   pip install -r requirements.txt           # everything except mpi4py
+#   pip install --no-cache-dir --no-binary :all: mpi4py==3.1.6
+#
+# Versions below are known-good as of 2025; relax or pin tighter to taste.
+
+# --- Core data / geospatial ---
+numpy==1.26.4
+pandas==2.2.2
+geopandas==0.14.4
+shapely==2.0.4
+pyproj==3.6.1
+fiona==1.9.6
+rasterio==1.3.10
+xarray==2024.6.0
+netCDF4==1.6.5          # GRIDMET / CHIRPS / AgERA5 NetCDF reading
+requests==2.32.3        # SSURGO / SoilGrids / NASA-POWER / CHIRPS REST
+tqdm==4.66.4
+PyYAML==6.0.1           # unified config.yml loader
+
+# --- Optional (only for specific sources) ---
+# rasterio (above) also powers SoilGrids VRT mode and HWSD raster sampling.
+# cdsapi is ONLY needed for the AGERA5 weather source (Copernicus CDS key req'd):
+#   pip install cdsapi
+# cdsapi==0.7.3
+# HWSD soil reads an SQLite DB via Python's stdlib sqlite3 (no extra pip dep).
+
+# --- HPC only (build against cluster MPI; see note above) ---
+mpi4py==3.1.6

@@ -1,0 +1,36 @@
+name: smoke
+
+# Offline smoke test: no internet APIs, no DSSAT executable required.
+# Validates config loading, helper-module imports, and the DSSAT .WTH writer.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal deps
+        # Only what the offline smoke test needs; heavy/optional geo + MPI deps
+        # are skipped gracefully by the test if absent.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas pyyaml
+
+      - name: Run offline smoke test
+        run: python tests/test_smoke.py
+
+      - name: Byte-compile all pipeline modules
+        run: |
+          python -m py_compile dssat_main_pipeline.py
+          python -m py_compile python_scripts/*.py
+          python -m py_compile tests/*.py

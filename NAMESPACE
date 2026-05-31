@@ -1,0 +1,14 @@
+# Hand-maintained namespace (not roxygen-generated yet).
+# Only the public process_* entry points are exported; all other functions in
+# the R/ files (helpers, SoilGrids/SSURGO internals) stay package-private.
+
+export(process_weather_daymet)
+export(process_weather_gridmet)
+export(process_weather_nasapower)
+export(process_weather_agera5)
+export(process_weather_openmeteo)
+export(process_weather_nasapower_chirps)
+export(process_soils_soilgrids)
+export(process_soils_soilgrids_online)
+export(process_soils_ssurgo)
+export(process_soils_hwsd)
