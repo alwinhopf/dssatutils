@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
-# PHASE 2 — rewire the "DSSAT ML Phenology Prediction" repo to consume dssatutils.
-# Idempotent and conservative: backs up touched files, removes only the duplicated
-# weather/soil scripts, and inserts a guarded install+library() in pipeline/config.R.
+# PHASE 2 — rewire "DSSAT ML Phenology Prediction" to consume dssatutils.
 #
-# Run AFTER the dssatutils remote+tag exist (or set USE_LOCAL=1 to install from path).
+# This repo does NOT use literal `source("r_scripts/...")`. It sources via a
+# variable, in several files, and sometimes with `local = TRUE`:
+#   source(file.path(R_SCRIPTS_DIR, "soil_soilgrids_online.R"))          # 01_particle_filter.R, 04_cohesive_calibration.R
+#   source(file.path(R_SCRIPTS_DIR, "soil_soilgrids.R"), local = TRUE)   # utils.R
+#   source(file.path(R_SCRIPTS_DIR, "soil_soilgrids_online.R"), local = TRUE) # utils.R
+#   source(file.path(PROJECT_ROOT, "r_scripts/soil_soilgrids_online.R")) # scratch/run_g29_debug.R
+#
+# Strategy: replace every weather_/soil_ source() line (any of those forms) with
+# `suppressMessages(library(dssatutils))` — preserving indentation — so the
+# functions resolve at each call site regardless of the config-sourcing chain
+# (library() attaches globally, which is also fine inside a `local = TRUE` fn).
+# Then prepend a one-time guarded install+library to pipeline/config.R, and
+# delete the now-duplicated weather/soil files from r_scripts/ (landcover stays).
+#
+# Idempotent; backs up every touched file. Run from anywhere.
 set -uo pipefail
 
 REPO="/Users/alwinhopf/Documents/GitHub/DSSAT ML Phenology Prediction"
 PKG_TAG="alwinhopf/dssatutils@v0.1.0"
-USE_LOCAL="${USE_LOCAL:-0}"          # 1 = install from local path instead of GitHub
+USE_LOCAL="${USE_LOCAL:-0}"                 # 1 = install from local path (no remote yet)
 LOCAL_PKG="/Users/alwinhopf/Documents/GitHub/dssatutils"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP="$REPO/.migration_backup_$STAMP"
@@ -17,53 +29,58 @@ cd "$REPO" || { echo "repo not found: $REPO"; exit 1; }
 mkdir -p "$BACKUP"
 echo "Backup dir: $BACKUP"
 
-# 1) Remove duplicated weather/soil R scripts (back them up first).
-for f in r_scripts/weather_daymet.R r_scripts/weather_gridmet.R \
-         r_scripts/weather_nasapower.R r_scripts/soil_soilgrids.R \
-         r_scripts/soil_soilgrids_online.R r_scripts/soil_ssurgo.R; do
-  if [ -f "$f" ]; then mkdir -p "$BACKUP/$(dirname "$f")"; cp "$f" "$BACKUP/$f"; git rm -q "$f" 2>/dev/null || rm -f "$f"; echo "removed $f"; fi
-done
-# NOTE: this repo also has weather_agera5/openmeteo/chirps & soil_hwsd ONLY if it
-# was synced from the Gridded repo. Remove any that exist:
-for f in r_scripts/weather_agera5.R r_scripts/weather_openmeteo.R \
-         r_scripts/weather_nasapower_chirps.R r_scripts/soil_hwsd.R; do
-  if [ -f "$f" ]; then cp "$f" "$BACKUP/$f"; git rm -q "$f" 2>/dev/null || rm -f "$f"; echo "removed $f"; fi
+# 1) Rewrite weather_/soil_ source() lines -> suppressMessages(library(dssatutils)).
+#    Matches both the R_SCRIPTS_DIR form and the literal r_scripts/ form, with or
+#    without a trailing `, local = TRUE)`. Keeps leading indentation.
+# (while-read loop, not mapfile — macOS /bin/bash is 3.2 and has no mapfile)
+grep -rlE 'source\([^)]*(R_SCRIPTS_DIR, "|r_scripts/)(weather|soil)_[a-z0-9_]*\.R' --include="*.R" . 2>/dev/null | while IFS= read -r file; do
+  rel="${file#./}"
+  mkdir -p "$BACKUP/$(dirname "$rel")"
+  cp "$file" "$BACKUP/$rel"
+  # Replace any matching whole source(...) line with the library() call.
+  sed -i '' -E 's/^([[:space:]]*)source\([^)]*(R_SCRIPTS_DIR, "|r_scripts\/)(weather|soil)_[a-z0-9_]*\.R"?[^)]*\).*/\1suppressMessages(library(dssatutils))  # [dssatutils] was source(...)/' "$file"
+  echo "rewired source() -> library(dssatutils) in $rel"
 done
 
-# 2) Insert guarded loader into pipeline/config.R (only once).
+# 2) Guarded install + library at top of pipeline/config.R (only once).
 CFG="pipeline/config.R"
 if [ -f "$CFG" ] && ! grep -q "dssatutils" "$CFG"; then
   cp "$CFG" "$BACKUP/config.R"
   if [ "$USE_LOCAL" = "1" ]; then
-    INSTALL_LINE="  remotes::install_local(\"$LOCAL_PKG\", force = FALSE)"
+    INSTALL_LINE="  remotes::install_local(\"$LOCAL_PKG\", force = FALSE, upgrade = \"never\")"
   else
     INSTALL_LINE="  remotes::install_github(\"$PKG_TAG\")"
   fi
   cat > /tmp/dssatutils_loader.R <<EOF
-# --- Shared weather/soil utilities (extracted to dssatutils) ---
+# --- Shared weather/soil utilities, extracted to the dssatutils package --------
+# (Replaces the per-script source() of r_scripts/weather_*.R & soil_*.R.)
 if (!requireNamespace("dssatutils", quietly = TRUE)) {
   if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
 $INSTALL_LINE
 }
-library(dssatutils)
-# --- end dssatutils loader ---
+suppressMessages(library(dssatutils))
+# ------------------------------------------------------------------------------
+
 EOF
-  # Prepend loader to top of config.R
   cat /tmp/dssatutils_loader.R "$CFG" > /tmp/config_new.R && mv /tmp/config_new.R "$CFG"
-  echo "patched $CFG with dssatutils loader"
+  echo "prepended dssatutils loader to $CFG"
 else
-  echo "config.R missing or already patched — skipping"
+  echo "config.R missing or already patched — skipping loader insert"
 fi
 
-# 3) Replace any source("r_scripts/weather_*|soil_*") with nothing (function now from pkg).
-#    Conservative: comment them out rather than delete, so context is preserved.
-grep -rln 'source(.*r_scripts/\(weather\|soil\)_' --include=*.R . 2>/dev/null | while read -r file; do
-  cp "$file" "$BACKUP/$(basename "$file").bak"
-  sed -i '' -E 's/^([[:space:]]*)(source\(.*r_scripts\/(weather|soil)_.*)/\1# [dssatutils] \2/' "$file"
-  echo "commented source() lines in $file"
+# 3) Delete the now-duplicated weather/soil scripts (KEEP landcover_*).
+for f in r_scripts/weather_daymet.R r_scripts/weather_gridmet.R \
+         r_scripts/weather_nasapower.R r_scripts/soil_soilgrids.R \
+         r_scripts/soil_soilgrids_online.R r_scripts/soil_ssurgo.R; do
+  if [ -f "$f" ]; then
+    mkdir -p "$BACKUP/$(dirname "$f")"; cp "$f" "$BACKUP/$f"
+    git rm -q "$f" 2>/dev/null || rm -f "$f"
+    echo "removed $f"
+  fi
 done
+echo "kept: r_scripts/landcover_raster.R, r_scripts/landcover_raster_to_gridpoints.R"
 
 echo
-echo "PHASE 2 edits staged. Review with:  git -C \"$REPO\" diff"
-echo "Then in R:  renv::init(); renv::snapshot()   # repo had no lockfile"
-echo "Backups in: $BACKUP"
+echo "PHASE 2 done. Review:  git -C \"$REPO\" diff"
+echo "Then in R (repo has no lockfile):  renv::init(); renv::snapshot()"
+echo "Backups: $BACKUP"

@@ -25,7 +25,7 @@ try:
 except ImportError:
     _HAS_TQDM = False
 
-_SDA_URL = "https://sdmdataaccess.nrcs.usda.gov/Tabular/post.rest"
+_SDA_URL = "https://SDMDataAccess.sc.egov.usda.gov/Tabular/post.rest"
 
 # Standard SSURGO layer depth ranges (cm top, cm bottom)
 _LAYER_RANGES = [
@@ -45,7 +45,7 @@ def _sda_query(sql: str, max_retries: int = 3, delay: float = 5.0) -> Optional[p
         try:
             r = requests.post(
                 _SDA_URL,
-                data={"query": sql, "format": "JSON+OBJECTS"},
+                data={"query": sql, "format": "json+columnname"},
                 timeout=120,
             )
             r.raise_for_status()
@@ -178,13 +178,15 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
     ]
 
     for _, layer in profile.sort_values("depth_bottom").iterrows():
-        slll = f"{layer['SLLL']:5.3f}".lstrip("0") or "0.000"
-        sdul = f"{layer['SDUL']:5.3f}".lstrip("0") or "0.000"
-        ssat = f"{layer['SSAT']:5.3f}".lstrip("0") or "0.000"
-        # Ensure leading space format like R's sub("^0", " ", ...)
-        slll = " " + slll if slll[0].isdigit() else slll
-        sdul = " " + sdul if sdul[0].isdigit() else sdul
-        ssat = " " + ssat if ssat[0].isdigit() else ssat
+        slll = f"{layer['SLLL']:5.3f}"
+        if slll.startswith("0."):
+            slll = " " + slll[1:]
+        sdul = f"{layer['SDUL']:5.3f}"
+        if sdul.startswith("0."):
+            sdul = " " + sdul[1:]
+        ssat = f"{layer['SSAT']:5.3f}"
+        if ssat.startswith("0."):
+            ssat = " " + ssat[1:]
 
         depth = int(layer["depth_bottom"])
         depth_str = f"{depth:6d}" if depth >= 10 else f"{depth:6d}"

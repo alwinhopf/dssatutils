@@ -66,7 +66,7 @@ def _download_daymet(lat: float, lon: float, start_year: int, end_year: int,
             # Response is a CSV; skip the metadata header lines (non-numeric first lines)
             lines = r.text.splitlines()
             # Find the header row (contains 'year')
-            header_idx = next(i for i, ln in enumerate(lines) if "year" in ln.lower())
+            header_idx = next(i for i, ln in enumerate(lines) if ln.strip().lower().startswith("year,"))
             csv_text = "\n".join(lines[header_idx:])
             df = pd.read_csv(io.StringIO(csv_text))
             # Normalize column names: strip whitespace and units

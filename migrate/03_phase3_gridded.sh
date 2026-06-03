@@ -27,7 +27,7 @@ RPIPE="dssat_main_pipeline.R"
 if [ -f "$RPIPE" ]; then
   cp "$RPIPE" "$BACKUP/$(basename "$RPIPE")"
   # Comment out weather_/soil_ source() lines (KEEP landcover_*).
-  sed -i '' -E 's/^([[:space:]]*)(source\(file\.path\(SCRIPT_DIR, "(weather|soil)_[a-z_]*\.R"\)\).*)/\1# [dssatutils] \2/' "$RPIPE"
+  sed -i '' -E 's/^([[:space:]]*)(source\(file\.path\(SCRIPT_DIR, "(weather|soil)_[a-z0-9_]*\.R"\)\).*)/\1# [dssatutils] \2/' "$RPIPE"
   # Insert library(dssatutils) once, just before the first commented line.
   if ! grep -q 'library(dssatutils)' "$RPIPE"; then
     awk '!ins && /# \[dssatutils\] source\(file\.path\(SCRIPT_DIR, "(weather|soil)_/ {print "library(dssatutils)  # [dssatutils] shared weather/soil sources"; ins=1} {print}' "$RPIPE" > /tmp/rpipe_new && mv /tmp/rpipe_new "$RPIPE"
