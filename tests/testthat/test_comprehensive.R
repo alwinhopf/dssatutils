@@ -206,13 +206,17 @@ test_that("process_weather_nasapower_chirps runs successfully with mocks", {
 })
 
 test_that("process_weather_agera5 runs successfully with mocks", {
+  # AgERA5 is an optional source: ecmwfr is in Suggests, so it may be absent on
+  # CI. Mocking requires the namespace to load, hence skip when not installed.
+  skip_if_not_installed("ecmwfr")
+
   work_dir <- tempfile()
   dir.create(work_dir)
   on.exit(unlink(work_dir, recursive = TRUE))
-  
+
   shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
   log_file <- file.path(work_dir, "error.log")
-  
+
   local_mocked_bindings(
     wf_request = function(...) 0,
     .package = "ecmwfr"
@@ -486,10 +490,14 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
 })
 
 test_that("process_soils_hwsd runs successfully with mocks", {
+  # HWSD uses DBI + RSQLite, both in Suggests, so they may be absent on CI.
+  skip_if_not_installed("DBI")
+  skip_if_not_installed("RSQLite")
+
   work_dir <- tempfile()
   dir.create(work_dir)
   on.exit(unlink(work_dir, recursive = TRUE))
-  
+
   # Create a dummy raster TIFF file
   dummy_tif <- file.path(work_dir, "dummy_hwsd.tif")
   writeLines("", dummy_tif)
