@@ -245,8 +245,17 @@ def process_weather_nasapower_chirps(
     os.makedirs(chirps_cache_dir, exist_ok=True)
 
     ids = [str(r[id_col]) for _, r in shapefile.iterrows()]
-    lats = np.array([float(r[lat_col]) for _, r in shapefile.iterrows()])
-    lons = np.array([float(r[lon_col]) for _, r in shapefile.iterrows()])
+    if hasattr(shapefile, "geometry") and shapefile.geometry.notna().any():
+        try:
+            g = shapefile.to_crs("EPSG:4326")
+            lons = g.geometry.x.values.astype(float)
+            lats = g.geometry.y.values.astype(float)
+        except Exception:
+            lats = np.array([float(r[lat_col]) for _, r in shapefile.iterrows()])
+            lons = np.array([float(r[lon_col]) for _, r in shapefile.iterrows()])
+    else:
+        lats = np.array([float(r[lat_col]) for _, r in shapefile.iterrows()])
+        lons = np.array([float(r[lon_col]) for _, r in shapefile.iterrows()])
 
     # --- 1. CHIRPS: download yearly netCDFs and extract per-point rain ---
     chirps_by_point: dict = {pid: {} for pid in ids}

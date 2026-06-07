@@ -3,19 +3,12 @@
 #  Filename: soil_ssurgo.R
 # ==============================================================================
 
-library(soilDB)
-library(sf)
-library(dplyr)
-library(tidyr)
-library(pbapply)
-library(parallel)
-library(readr)
-library(tools)
+
 
 # --- Wrapper for Retries ---
 robust_SDA_query <- function(query, max_retries = 3, retry_delay_seconds = 5) {
   for (attempt in 1:max_retries) {
-    result <- try(SDA_query(query), silent = TRUE)
+    result <- try(soilDB::SDA_query(query), silent = TRUE)
     if (!inherits(result, "try-error")) return(result)
     Sys.sleep(retry_delay_seconds)
   }
@@ -24,7 +17,7 @@ robust_SDA_query <- function(query, max_retries = 3, retry_delay_seconds = 5) {
 
 robust_SDA_spatialQuery <- function(point_sf, what, max_retries = 3, retry_delay_seconds = 5) {
   for (attempt in 1:max_retries) {
-    result <- try(SDA_spatialQuery(point_sf, what = what), silent = TRUE)
+    result <- try(soilDB::SDA_spatialQuery(point_sf, what = what), silent = TRUE)
     if (!inherits(result, "try-error")) return(result)
     Sys.sleep(retry_delay_seconds)
   }
@@ -34,7 +27,7 @@ robust_SDA_spatialQuery <- function(point_sf, what, max_retries = 3, retry_delay
 # --- Calculation Logic ---
 calculate_soil_properties <- function(soil_properties, top_depth, bottom_depth) {
   ungrouped <- soil_properties %>%
-    mutate(
+    dplyr::mutate(
       adj_top = pmax(hzdept_r, top_depth),
       adj_bottom = pmin(hzdepb_r, bottom_depth),
       thickness = adj_bottom - adj_top,
@@ -44,11 +37,11 @@ calculate_soil_properties <- function(soil_properties, top_depth, bottom_depth) 
       weighted_bd = dbthirdbar_r * thickness * comppct_r,
       depth_range = paste(top_depth, "-", bottom_depth, "cm")
     ) %>%
-    filter(thickness > 0)
+    dplyr::filter(thickness > 0)
   
   grouped <- ungrouped %>%
-    group_by(mukey, depth_range) %>%
-    summarize(
+    dplyr::group_by(mukey, depth_range) %>%
+    dplyr::summarize(
       clay_pct = sum(weighted_clay, na.rm = TRUE) / sum(thickness * comppct_r, na.rm = TRUE),
       sand_pct = sum(weighted_sand, na.rm = TRUE) / sum(thickness * comppct_r, na.rm = TRUE),
       silt_pct = 100 - clay_pct - sand_pct,
@@ -86,9 +79,9 @@ format_dssat_soil_single <- function(profile_data, output_dir) {
       file = filename, append = TRUE)
   
   profile_data %>%
-    mutate(depth_num = as.numeric(sub(".*-", "", sub("cm", "", depth_range)))) %>%
-    arrange(depth_num) %>%
-    group_walk(function(layer, key) {
+    dplyr::mutate(depth_num = as.numeric(sub(".*-", "", sub("cm", "", depth_range)))) %>%
+    dplyr::arrange(depth_num) %>%
+    dplyr::group_walk(function(layer, key) {
       depth_val <- layer$depth_num
       slll <- sprintf("%5.3f", layer$SLLL)
       sdul <- sprintf("%5.3f", layer$SDUL)
@@ -116,12 +109,12 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   # --- 1. FILTER: Identify Missing Points BEFORE Loop ---
   # Convert sf to standard dataframe to avoid geometry overhead during filtering
   grid_df <- grid_points %>% 
-    st_drop_geometry() %>% 
+    sf::st_drop_geometry() %>% 
     as.data.frame()
   
   # Ensure coords are present in dataframe
-  if(!lat_col %in% names(grid_df)) grid_df[[lat_col]] <- st_coordinates(grid_points)[,2]
-  if(!long_col %in% names(grid_df)) grid_df[[long_col]] <- st_coordinates(grid_points)[,1]
+  if(!lat_col %in% names(grid_df)) grid_df[[lat_col]] <- sf::st_coordinates(grid_points)[,2]
+  if(!long_col %in% names(grid_df)) grid_df[[long_col]] <- sf::st_coordinates(grid_points)[,1]
   
   # Get list of existing SOL files (Fast Directory Scan)
   if(dir.exists(output_dir_individual)) {
@@ -156,7 +149,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
     
     # Reconstruct sf object for spatial query
     # We assume WGS84 (EPSG:4326) because previous steps transformed it
-    point_sf <- st_as_sf(point_data_row, coords = c(long_col, lat_col), crs = 4326) 
+    point_sf <- sf::st_as_sf(point_data_row, coords = c(long_col, lat_col), crs = 4326) 
     
     # 1. Spatial Query
     soil_data_query <- robust_SDA_spatialQuery(point_sf, what = 'mukey')
@@ -216,7 +209,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
       if(length(results_list) > 0) {
         results_df <- do.call(rbind, results_list)
         # Add derived DSSAT physics
-        results_df <- results_df %>% mutate(
+        results_df <- results_df %>% dplyr::mutate(
           ID=ID, longitude=point_data_row[[long_col]], latitude=point_data_row[[lat_col]],
           bedrock_depth_cm=bedrock_depth,
           sand_dec=sand_pct/100, clay_dec=clay_pct/100, om_dec=om_pct/100,
@@ -247,9 +240,9 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   # --- 1. SETUP CLUSTER (Done ONCE, outside the loop) ---
   if (.Platform$OS.type == "windows") {
     message(sprintf("Initializing cluster with %d cores...", n_cores))
-    cl <- makeCluster(n_cores)
-    clusterEvalQ(cl, { library(soilDB); library(sf); library(dplyr); library(tidyr) })
-    clusterExport(cl, varlist=c("process_point_wrapper", "robust_SDA_query", 
+    cl <- parallel::makeCluster(n_cores)
+    parallel::clusterEvalQ(cl, { library(soilDB); library(sf); library(dplyr); library(tidyr) })
+    parallel::clusterExport(cl, varlist=c("process_point_wrapper", "robust_SDA_query", 
                                 "robust_SDA_spatialQuery", "calculate_soil_properties",
                                 "format_dssat_soil_single", "output_dir_individual", 
                                 "id_col", "lat_col", "long_col", "format_sql_func"), 
@@ -269,16 +262,16 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
     chunk_list <- split(chunk_data, seq(nrow(chunk_data)))
     
     # Run Parallel on Chunk
-    chunk_results <- pblapply(chunk_list, process_point_wrapper, cl = cl)
+    chunk_results <- pbapply::pblapply(chunk_list, process_point_wrapper, cl = cl)
     
     # Filter NULLs and Combine
     valid_results <- chunk_results[!sapply(chunk_results, is.null)]
     
     if(length(valid_results) > 0) {
-      chunk_df <- bind_rows(valid_results)
+      chunk_df <- dplyr::bind_rows(valid_results)
       
       # Write to CSV (Append Mode)
-      write_csv(chunk_df, output_dir_csv, append = file.exists(output_dir_csv))
+      readr::write_csv(chunk_df, output_dir_csv, append = file.exists(output_dir_csv))
     }
     
     # --- CRITICAL: CLEAR MEMORY ---
@@ -289,7 +282,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   
   # --- 3. CLEANUP ---
   if (.Platform$OS.type == "windows") {
-    stopCluster(cl)
+    parallel::stopCluster(cl)
   }
   
   message("SSURGO Processing Complete.")

@@ -52,15 +52,24 @@ def _calc_amp(tmax_arr: np.ndarray, tmin_arr: np.ndarray,
 
 def _download_nc(url: str, dest: str, timeout: int = 3600) -> bool:
     """Stream-download a NetCDF file; return True on success."""
+    tmp_dest = dest + ".tmp"
     try:
         with requests.get(url, stream=True, timeout=timeout) as r:
             r.raise_for_status()
-            with open(dest, "wb") as fh:
+            with open(tmp_dest, "wb") as fh:
                 for chunk in r.iter_content(chunk_size=1 << 20):
                     fh.write(chunk)
+        if os.path.exists(dest):
+            os.remove(dest)
+        os.rename(tmp_dest, dest)
         return True
     except Exception as exc:
         print(f"Download error ({url}): {exc}")
+        if os.path.exists(tmp_dest):
+            try:
+                os.remove(tmp_dest)
+            except Exception:
+                pass
         return False
 
 
@@ -134,17 +143,33 @@ def process_weather_gridmet(
     # -----------------------------------------------------------------------
     # 2. Download NetCDF files
     # -----------------------------------------------------------------------
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     os.makedirs(gridmet_cache_dir, exist_ok=True)
     downloaded: dict[str, dict[int, str]] = {v: {} for v in _GRIDMET_VARS}
 
+    tasks = []
     for var_name, abbrev in _GRIDMET_VARS.items():
         for yr in years_needed:
             fname = f"{abbrev}_{yr}.nc"
             dest = os.path.join(gridmet_cache_dir, fname)
             url = _GRIDMET_BASE_URL + fname
-            if not os.path.exists(dest):
-                print(f"  Downloading {fname}...")
-                _download_nc(url, dest)
+            tasks.append((var_name, yr, url, dest))
+
+    def _download_task(task):
+        var_name, yr, url, dest = task
+        if not os.path.exists(dest):
+            print(f"  Downloading {os.path.basename(dest)}...")
+            success = _download_nc(url, dest)
+            if not success:
+                print(f"  Failed to download {os.path.basename(dest)}")
+        return var_name, yr, dest
+
+    print(f"Starting parallel download of {len(tasks)} GridMET NetCDF weather files using 8 threads...")
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_download_task, t): t for t in tasks}
+        for future in as_completed(futures):
+            var_name, yr, dest = future.result()
             if os.path.exists(dest):
                 downloaded[var_name][yr] = dest
 

@@ -13,13 +13,6 @@
 # Same argument signature as process_weather_nasapower() — a drop-in source.
 # ---------------------------------------------------------------------------
 
-library(httr)
-library(jsonlite)
-library(lubridate)
-library(foreach)
-library(doParallel)
-library(dplyr)
-
 # Log-wind-profile factor: 10 m -> 2 m wind (FAO-56), ~0.748.
 .OMET_WIND_10M_TO_2M <- 0.748
 
@@ -42,17 +35,23 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
                         "precipitation_sum", "shortwave_radiation_sum",
                         "wind_speed_10m_max"), collapse = ",")
 
-  cl <- makeCluster(n_cores)
-  registerDoParallel(cl)
+  cl <- parallel::makeCluster(n_cores)
+  doParallel::registerDoParallel(cl)
   message(sprintf("Registered %d cores for parallel Open-Meteo download.", n_cores))
+
+  # Extract coordinates and IDs robustly
+  coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
+  ids <- coords_list$ids
+  lats <- coords_list$lats
+  lons <- coords_list$lons
 
   foreach(i = 1:nrow(shapefile),
           .packages = c("httr", "jsonlite", "lubridate", "dplyr"),
           .export = c(".OMET_WIND_10M_TO_2M")) %dopar% {
 
-    latitude  <- shapefile[[lat_col]][i]
-    longitude <- shapefile[[lon_col]][i]
-    point_id  <- shapefile[[id_col]][i]
+    latitude  <- lats[i]
+    longitude <- lons[i]
+    point_id  <- ids[i]
     output_file <- file.path(output_dir, sprintf("%s.WTH", point_id))
 
     if (file.exists(output_file)) return(NULL)
@@ -72,7 +71,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
       }
       if (is.null(resp)) stop("Open-Meteo request failed after retries.")
 
-      d <- jsonlite::fromJSON(httr::content(resp, as = "text", encoding = "UTF-8"))
+      d     <- jsonlite::fromJSON(httr::content(resp, as = "text", encoding = "UTF-8"))
       daily <- d$daily
       if (is.null(daily) || length(daily$time) == 0) stop("No data returned from Open-Meteo.")
 
@@ -122,6 +121,6 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
     })
   }
 
-  stopCluster(cl)
+  parallel::stopCluster(cl)
   message(sprintf("\nOpen-Meteo processing complete. Check the '%s' directory.\n", output_dir))
 }

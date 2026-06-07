@@ -2,12 +2,7 @@
 #  SOIL HELPER: SOILGRIDS / EXTERNAL MASTER .SOL -> per-point .SOL + mapping CSV
 #  Filename: soil_soilgrids.R  (FIXED: no top-level execution; numeric-only IDs)
 # ==============================================================================
-suppressPackageStartupMessages({
-  library(sf)
-  library(dplyr)
-  library(stringr)
-  library(readr)
-})
+
 
 #' Process SoilGrids / external DSSAT soil master file into per-point SOLs + mapping CSV
 #'
@@ -72,7 +67,7 @@ process_soils_soilgrids <- function(
 
   # Extract source IDs: first token after '*'
   raw_ids <- lines[starts]
-  source_ids <- str_extract(raw_ids, "(?<=\\*)[^\\s]+")
+  source_ids <- stringr::str_extract(raw_ids, "(?<=\\*)[^\\s]+")
 
   # --------------------------------------------------------------------
   # 2. Extract Coordinates (scan a small chunk for @SITE and lat/lon)
@@ -86,9 +81,9 @@ process_soils_soilgrids <- function(
     candidate_lines <- txt_chunk[(site_tag_idx + 1) : min((site_tag_idx + 3), length(txt_chunk))]
 
     for (ln in candidate_lines) {
-      if (!str_detect(ln, "[0-9]")) next
+      if (!stringr::str_detect(ln, "[0-9]")) next
 
-      raw_matches <- str_extract_all(
+      raw_matches <- stringr::str_extract_all(
         ln,
         "-?\\d+\\.\\d+|-?\\d+\\.|-?\\.\\d+|-?\\d+"
       )[[1]]
@@ -127,23 +122,23 @@ process_soils_soilgrids <- function(
     )
   }
 
-  soil_lib_df <- bind_rows(soil_df_list) %>%
-    filter(!is.na(lat) & !is.na(lon))
+  soil_lib_df <- dplyr::bind_rows(soil_df_list) %>%
+    dplyr::filter(!is.na(lat) & !is.na(lon))
 
   if (nrow(soil_lib_df) == 0) {
     stop("No soil profiles with valid lat/lon were found in the master .SOL (check @SITE blocks).")
   }
 
-  soil_sf <- st_as_sf(soil_lib_df, coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+  soil_sf <- sf::st_as_sf(soil_lib_df, coords = c("lon", "lat"), crs = 4326, remove = FALSE)
 
   # --------------------------------------------------------------------
   # 3. Prepare grid points as sf (WGS84)
   # --------------------------------------------------------------------
   if (inherits(grid_points, "sf")) {
-    gp_sf <- st_transform(grid_points, 4326)
-    gp_coords <- st_coordinates(gp_sf)
+    gp_sf <- sf::st_transform(grid_points, 4326)
+    gp_coords <- sf::st_coordinates(gp_sf)
     gp_df <- gp_sf %>%
-      mutate(.gp_lon = gp_coords[,1], .gp_lat = gp_coords[,2])
+      dplyr::mutate(.gp_lon = gp_coords[,1], .gp_lat = gp_coords[,2])
   } else {
     gp_df <- as.data.frame(grid_points)
     # try common lon/lat names
@@ -154,7 +149,7 @@ process_soils_soilgrids <- function(
     }
     gp_df$.gp_lon <- gp_df[[lon_col[1]]]
     gp_df$.gp_lat <- gp_df[[lat_col[1]]]
-    gp_sf <- st_as_sf(gp_df, coords = c(".gp_lon",".gp_lat"), crs = 4326, remove = FALSE)
+    gp_sf <- sf::st_as_sf(gp_df, coords = c(".gp_lon",".gp_lat"), crs = 4326, remove = FALSE)
   }
 
   if (!(id_col %in% names(gp_df))) {
@@ -164,7 +159,7 @@ process_soils_soilgrids <- function(
   # --------------------------------------------------------------------
   # 4. Nearest soil profile to each grid point
   # --------------------------------------------------------------------
-  nearest_idx <- st_nearest_feature(gp_sf, soil_sf)
+  nearest_idx <- sf::st_nearest_feature(gp_sf, soil_sf)
   nearest <- soil_lib_df[nearest_idx, , drop = FALSE]
 
   point_ids_raw <- as.character(gp_df[[id_col]])
@@ -190,7 +185,7 @@ process_soils_soilgrids <- function(
   # --------------------------------------------------------------------
   # 5. Write mapping CSV
   # --------------------------------------------------------------------
-  write_csv(mapping %>% select(ID, SOIL_ID, SOURCE_SOIL_ID, SOIL_LAT, SOIL_LON), output_csv_path)
+  readr::write_csv(mapping %>% dplyr::select(ID, SOIL_ID, SOURCE_SOIL_ID, SOIL_LAT, SOIL_LON), output_csv_path)
 
   # --------------------------------------------------------------------
   # 6. Write per-point .SOL files with rewritten profile IDs
@@ -208,5 +203,5 @@ process_soils_soilgrids <- function(
     writeLines(prof_lines, out_file, useBytes = TRUE)
   }
 
-  invisible(mapping %>% select(ID, SOIL_ID, SOURCE_SOIL_ID, SOIL_LAT, SOIL_LON))
+  invisible(mapping %>% dplyr::select(ID, SOIL_ID, SOURCE_SOIL_ID, SOIL_LAT, SOIL_LON))
 }

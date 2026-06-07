@@ -17,10 +17,6 @@
 # ("p05" default or "p25").
 # ---------------------------------------------------------------------------
 
-library(nasapower)
-library(lubridate)
-library(dplyr)
-library(terra)
 
 process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
                                              output_dir, id_col, lat_col, lon_col,
@@ -45,9 +41,11 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
   dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
   dir.create(chirps_cache_dir, showWarnings = FALSE, recursive = TRUE)
 
-  ids  <- as.character(shapefile[[id_col]])
-  lats <- as.numeric(shapefile[[lat_col]])
-  lons <- as.numeric(shapefile[[lon_col]])
+  # Extract coordinates and IDs robustly
+  coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
+  ids <- coords_list$ids
+  lats <- coords_list$lats
+  lons <- coords_list$lons
 
   # --- 1. CHIRPS: download yearly netCDFs and extract per-point daily rain ---
   # chirps_rain[[point_id]] is a named numeric vector keyed by "YYYYDOY".
@@ -119,7 +117,7 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
         dplyr::rename(SRAD = ALLSKY_SFC_SW_DWN, TMAX = T2M_MAX, TMIN = T2M_MIN,
                       RAIN = PRECTOTCORR, TDEW = T2MDEW, RH2M = RH2M, WIND = WS2M) %>%
         dplyr::mutate(DATE = sprintf("%d%03d", YEAR, DOY)) %>%
-        dplyr::mutate(across(where(is.numeric), ~ ifelse(. == -999, -99, .)))
+        dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~ ifelse(. == -999, -99, .)))
 
       # Merge CHIRPS rainfall over NASA-POWER rain (within coverage band).
       n_chirps <- 0

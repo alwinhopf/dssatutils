@@ -20,10 +20,6 @@
 # ecmwfr + terra. Same .WTH format as the NASA POWER / Open-Meteo writers.
 # ---------------------------------------------------------------------------
 
-library(lubridate)
-library(dplyr)
-library(terra)
-
 # AgERA5 CDS variable -> (variable, selector kind+value) and DSSAT unit handling.
 # 2m_relative_humidity uses a fixed-hour `time` selector (NOT a 24-hour
 # statistic); fluxes take no selector. sel_kind is "statistic", "time", or NA.
@@ -45,8 +41,11 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
   if (!dir.exists(agera5_cache_dir)) dir.create(agera5_cache_dir, recursive = TRUE)
 
-  ids  <- as.character(shapefile[[id_col]])
-  lats <- as.numeric(shapefile[[lat_col]]); lons <- as.numeric(shapefile[[lon_col]])
+  # Extract coordinates and IDs robustly
+  coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
+  ids <- coords_list$ids
+  lats <- coords_list$lats
+  lons <- coords_list$lons
   end_year <- min(end_year, lubridate::year(Sys.Date()))
 
   message(sprintf("--- Starting AgERA5 Download (Years: %d-%d) ---", start_year, end_year))
@@ -112,8 +111,8 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
       wd$MM <- lubridate::month(as.Date(wd$DATE, format = "%Y%j"))
       wd$TAVG <- (wd$TMAX + wd$TMIN) / 2
       tav <- mean(wd$TAVG, na.rm = TRUE)
-      monthly <- wd %>% group_by(YEAR, MM) %>% summarise(m = mean(TAVG), .groups = "drop")
-      amp <- mean((monthly %>% group_by(YEAR) %>% summarise(a = max(m) - min(m)))$a, na.rm = TRUE)
+      monthly <- wd %>% dplyr::group_by(YEAR, MM) %>% dplyr::summarise(m = mean(TAVG), .groups = "drop")
+      amp <- mean((monthly %>% dplyr::group_by(YEAR) %>% dplyr::summarise(a = max(m) - min(m), .groups = "drop"))$a, na.rm = TRUE)
 
       hdr <- sprintf(
         "$WEATHER DATA: AgERA5 (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  AGE5 %8.4f %8.4f   -99 %5.1f %5.1f   2.0  10.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",

@@ -23,18 +23,10 @@
 # Override from dssat_main_pipeline.R before calling the function:
 #   USE_REST_API <- TRUE    # REST API mode  (interactive / local)
 #   USE_REST_API <- FALSE   # VRT/GDAL mode  (HPC / batch)
-USE_REST_API <- TRUE
-
-# ==============================================================================
-#  LIBRARIES
-# ==============================================================================
-library(terra)
-library(sf)
-library(dplyr)
-library(tidyr)
-library(stringr)
-library(httr)
-library(jsonlite)
+# NOTE: USE_REST_API default is set inside process_soils_soilgrids_online().
+# Override from the calling script before invoking the function:
+#   USE_REST_API <- TRUE    # REST API mode  (interactive / local)
+#   USE_REST_API <- FALSE   # VRT/GDAL mode  (HPC / batch)
 
 # ==============================================================================
 #  1. PHYSICS & CALCULATIONS (Saxton & Rawls, 2006)
@@ -116,7 +108,7 @@ format_dssat_sol_file <- function(site_data, output_dir,
       file = filename, append = TRUE)
   
   # --- Layer Iteration ---
-  site_data <- site_data %>% arrange(depth_bottom)
+  site_data <- site_data %>% dplyr::arrange(depth_bottom)
   
   for(i in 1:nrow(site_data)) {
     layer <- site_data[i, ]
@@ -180,12 +172,12 @@ fetch_soilgrids_rest <- function(lat, lon) {
       # Standard polite delay before request
       Sys.sleep(1) 
       
-      response <- GET(url, query = query_params)
-      status <- status_code(response)
+      response <- httr::GET(url, query = query_params)
+      status <- httr::status_code(response)
       
       # SUCCESS CASE
       if (status == 200) {
-        content_json <- fromJSON(content(response, "text", encoding = "UTF-8"))
+        content_json <- jsonlite::fromJSON(httr::content(response, "text", encoding = "UTF-8"))
         layers_data <- content_json$properties$layers
         
         if(!is.null(layers_data) && length(layers_data) > 0) {
@@ -199,7 +191,7 @@ fetch_soilgrids_rest <- function(lat, lon) {
             for(j in 1:nrow(depths_df)) {
               depth_label <- depths_df$label[j]
               val <- depths_df$values$mean[j]
-              ranges <- as.numeric(unlist(str_extract_all(depth_label, "\\d+")))
+              ranges <- as.numeric(unlist(stringr::str_extract_all(depth_label, "\\d+")))
               
               parsed_list[[length(parsed_list)+1]] <- data.frame(
                 prop = prop_name,
@@ -210,7 +202,7 @@ fetch_soilgrids_rest <- function(lat, lon) {
               )
             }
           }
-          result <- bind_rows(parsed_list)
+          result <- dplyr::bind_rows(parsed_list)
           break # Exit retry loop on success
         }
         
@@ -249,8 +241,8 @@ fetch_soilgrids_vrt <- function(gridfile, id_col) {
   
   # Project to IGH
   igh_proj <- "+proj=igh +lat_0=0 +lon_0=0 +datum=WGS84 +units=m +no_defs"
-  points_igh <- st_transform(gridfile, igh_proj)
-  vect_points <- vect(points_igh)
+  points_igh <- sf::st_transform(gridfile, igh_proj)
+  vect_points <- terra::vect(points_igh)
   
   all_data <- list()
   
@@ -261,7 +253,7 @@ fetch_soilgrids_vrt <- function(gridfile, id_col) {
       vrt_path <- paste0(sg_url, prop, "/", prop, "_", depth_label, "_mean.vrt")
       
       tryCatch({
-        r <- rast(vrt_path)
+        r <- terra::rast(vrt_path)
         vals <- terra::extract(r, vect_points, ID=FALSE)
         
         temp_df <- data.frame(
@@ -276,7 +268,7 @@ fetch_soilgrids_vrt <- function(gridfile, id_col) {
       }, error = function(e) message(paste("Skip", prop, depth_label)))
     }
   }
-  return(bind_rows(all_data))
+  return(dplyr::bind_rows(all_data))
 }
 
 # ==============================================================================
@@ -284,14 +276,14 @@ fetch_soilgrids_vrt <- function(gridfile, id_col) {
 # ==============================================================================
 process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_sol_dir, id_col) {
   
-  use_rest <- if(exists("USE_REST_API")) USE_REST_API else TRUE
+  use_rest <- if(exists("USE_REST_API", envir = globalenv())) get("USE_REST_API", envir = globalenv()) else TRUE
   message(sprintf("--- Starting SoilGrids Extraction (Mode: %s) ---", ifelse(use_rest, "REST API", "VRT")))
   
   if (!inherits(gridfile, "sf")) stop("gridfile must be an sf object")
   
   # WGS84 Coords
-  grid_wgs84 <- st_transform(gridfile, 4326)
-  coords <- st_coordinates(grid_wgs84)
+  grid_wgs84 <- sf::st_transform(gridfile, 4326)
+  coords <- sf::st_coordinates(grid_wgs84)
   grid_wgs84$lon_wgs84 <- coords[,1]
   grid_wgs84$lat_wgs84 <- coords[,2]
   
@@ -314,7 +306,7 @@ process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_s
         results_list[[i]] <- res
       }
     }
-    full_df <- bind_rows(results_list)
+    full_df <- dplyr::bind_rows(results_list)
     
   } else {
     full_df <- fetch_soilgrids_vrt(gridfile, id_col)
@@ -328,11 +320,11 @@ process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_s
   message("Restructuring and calculating soil physics...")
   
   wide_df <- full_df %>%
-    pivot_wider(names_from = prop, values_from = value)
+    tidyr::pivot_wider(names_from = prop, values_from = value)
   
   # Conversion & Physics
   processed_df <- wide_df %>%
-    mutate(
+    dplyr::mutate(
       clay = clay / 10,       
       sand = sand / 10,       
       silt = silt / 10,       
@@ -341,12 +333,12 @@ process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_s
       bdod = bdod / 100,      
       cfvo = cfvo / 10        
     ) %>%
-    rowwise() %>%
-    mutate(
+    dplyr::rowwise() %>%
+    dplyr::mutate(
       physics = list(calculate_soil_physics(sand, clay, om_pct))
     ) %>%
-    unnest_wider(physics) %>%
-    ungroup()
+    tidyr::unnest_wider(physics) %>%
+    dplyr::ungroup()
   
   coords_df <- data.frame(
     ID = grid_wgs84[[id_col]],
@@ -356,7 +348,7 @@ process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_s
   
   # Join Lat/Lon back
   # Note: Use inner_join so we only process points that actually retrieved data
-  final_df <- inner_join(processed_df, coords_df, by = "ID")
+  final_df <- dplyr::inner_join(processed_df, coords_df, by = "ID")
   
   # --- WRITE OUTPUTS (SAFE LOOP) ---
   
@@ -378,7 +370,7 @@ process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_s
   error_count <- 0
   
   for(uid in unique_ids) {
-    site_sub <- final_df %>% filter(ID == uid)
+    site_sub <- final_df %>% dplyr::filter(ID == uid)
     
     # THE SAFE BLOCK
     tryCatch({

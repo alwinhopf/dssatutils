@@ -1,10 +1,5 @@
 # File: weather_daymet.R
 
-# Load libraries needed *only* for this task
-library(daymetr)
-library(lubridate)
-library(foreach)
-library(doParallel)
 
 # Wrap all your existing Daymet logic in a function
 process_weather_daymet <- function(shapefile, start_year, end_year, output_dir, 
@@ -20,18 +15,24 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
     end_year <- current_year - 1
   }
   
-  cl <- makeCluster(n_cores)
-  registerDoParallel(cl)
+  cl <- parallel::makeCluster(n_cores)
+  doParallel::registerDoParallel(cl)
   message(sprintf("Registered %d cores for parallel Daymet download.", n_cores))
   
-  leap_years <- seq(start_year, end_year)[leap_year(seq(start_year, end_year))]
+  # Extract coordinates and IDs robustly
+  coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
+  ids <- coords_list$ids
+  lats <- coords_list$lats
+  lons <- coords_list$lons
+  
+  leap_years <- seq(start_year, end_year)[lubridate::leap_year(seq(start_year, end_year))]
   
   # This is your exact code from STEP 2, just inside a function
   foreach(i = 1:nrow(shapefile), .packages = c("daymetr", "lubridate")) %dopar% {
     
-    latitude <- shapefile[[lat_col]][i]
-    longitude <- shapefile[[lon_col]][i]
-    point_id <- shapefile[[id_col]][i]
+    latitude <- lats[i]
+    longitude <- lons[i]
+    point_id <- ids[i]
     output_file <- file.path(output_dir, sprintf("%s.WTH", point_id))
     
     if (file.exists(output_file)) {
@@ -39,7 +40,7 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
     }
     
     tryCatch({
-      daymet_data <- download_daymet(
+      daymet_data <- daymetr::download_daymet(
         lat = latitude,
         lon = longitude,
         start = start_year,
@@ -54,7 +55,7 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
       weather_data$t_avg <- (weather_data$`tmax..deg.c.` + weather_data$`tmin..deg.c.`) / 2
       tav <- mean(weather_data$t_avg)
       
-      weather_data$month <- month(as.Date(weather_data$yday - 1, origin = paste0(weather_data$year, "-01-01")))
+      weather_data$month <- lubridate::month(as.Date(weather_data$yday - 1, origin = paste0(weather_data$year, "-01-01")))
       monthly_temps <- aggregate(t_avg ~ year + month, data = weather_data, FUN = mean)
       annual_amps <- aggregate(t_avg ~ year, data = monthly_temps, FUN = function(x) max(x) - min(x))
       amp <- mean(annual_amps$t_avg)
@@ -85,7 +86,7 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
       
       # Format and write the .WTH file
       wth_header <- sprintf(
-        "$WEATHER DATA: DayMet Data (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n DMET  %8.4f %8.4f   -99 %5.1f %5.1f   -99   -99\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+        "$WEATHER DATA: DayMet Data (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  DMET  %8.4f %8.4f   -99 %5.1f %5.1f   -99   -99\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
         point_id, latitude, longitude, tav, amp
       )
       
@@ -111,6 +112,6 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
     })
   } # End foreach loop
   
-  stopCluster(cl)
+  parallel::stopCluster(cl)
   message(sprintf("\nDaymet processing complete. Check the '%s' directory.\n", output_dir))
 }

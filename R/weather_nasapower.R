@@ -1,13 +1,5 @@
 # File: weather_nasapower.R
 
-# Load libraries needed *only* for this task
-library(nasapower)
-library(lubridate)
-library(foreach)
-library(doParallel)
-library(dplyr)
-library(sf)
-
 # Define the function with the *exact same arguments* as the Daymet one
 process_weather_nasapower <- function(shapefile, start_year, end_year, output_dir,
                                       id_col, lat_col, lon_col, n_cores, log_file) {
@@ -27,9 +19,15 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     end_date_str <- paste0(end_year, "-12-31")
   }  # ← FIX 1: else block now properly closed before cluster setup
   
-  cl <- makeCluster(n_cores)
-  registerDoParallel(cl)
+  cl <- parallel::makeCluster(n_cores)
+  doParallel::registerDoParallel(cl)
   message(sprintf("Registered %d cores for parallel NASA-POWER download.", n_cores))
+  
+  # Extract coordinates and IDs robustly
+  coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
+  ids <- coords_list$ids
+  lats <- coords_list$lats
+  lons <- coords_list$lons
   
   # Define the DSSAT variables from NASA-POWER
   nasa_params <- c(
@@ -44,9 +42,9 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
   
   foreach(i = 1:nrow(shapefile), .packages = c("nasapower", "lubridate", "dplyr")) %dopar% {
     
-    latitude  <- shapefile[[lat_col]][i]
-    longitude <- shapefile[[lon_col]][i]
-    point_id  <- shapefile[[id_col]][i]
+    latitude  <- lats[i]
+    longitude <- lons[i]
+    point_id  <- ids[i]
     output_file <- file.path(output_dir, sprintf("%s.WTH", point_id))
     
     if (file.exists(output_file)) {
@@ -56,7 +54,7 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     tryCatch({
       
       # Download NASA-POWER data
-      power_data <- get_power(
+      power_data <- nasapower::get_power(
         community    = "AG",
         lonlat       = c(longitude, latitude),
         pars         = nasa_params,
@@ -84,7 +82,7 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
           DATE = sprintf("%d%03d", YEAR, DOY)
         ) %>%
         # NASA-POWER uses -999 for missing values
-        dplyr::mutate(across(where(is.numeric), ~ ifelse(. == -999, -99, .)))
+        dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~ ifelse(. == -999, -99, .)))
       
       # Calculate TAV and AMP
       weather_data$TAVG <- (weather_data$TMAX + weather_data$TMIN) / 2
@@ -130,7 +128,7 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     
   }  # End foreach loop
   
-  stopCluster(cl)
+  parallel::stopCluster(cl)
   message(sprintf("\nNASA-POWER processing complete. Check the '%s' directory.\n", output_dir))
   
 }

@@ -30,5 +30,7 @@ Imports:
     pbapply,
     DSSAT
 Suggests:
-    ecmwfr
+    ecmwfr,
+    DBI,
+    RSQLite
 RoxygenNote: 7.3.1

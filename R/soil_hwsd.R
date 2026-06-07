@@ -21,8 +21,6 @@
 # format_dssat_sol_file() from soil_soilgrids_online.R (source that first).
 # ---------------------------------------------------------------------------
 
-library(terra)
-library(dplyr)
 # DBI + RSQLite are loaded lazily inside process_soils_hwsd() so that simply
 # sourcing this file (which the main pipeline does for ALL soil modules at
 # startup) does not require the SQLite packages unless you actually run HWSD.

@@ -3,15 +3,6 @@
 # Optimized for >10,000 points. 
 # Processes points in batches to prevent RAM crashes. No Parallel Cluster.
 
-library(terra)
-library(sf)
-library(dplyr)
-library(ncdf4)
-library(httr)
-library(DSSAT) 
-library(lubridate)
-library(pbapply) 
-
 process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir, 
                                     id_col, lat_col, lon_col, n_cores, log_file, gridmet_cache_dir,
                                     chunk_size = 3000) { # Added chunk_size argument
@@ -49,7 +40,7 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
       url <- paste0("http://www.northwestknowledge.net/metdata/data/", file_name)
       
       if (!file.exists(dest_file)) {
-        tryCatch({ GET(url, write_disk(dest_file, overwrite = TRUE)) }, 
+        tryCatch({ httr::GET(url, httr::write_disk(dest_file, overwrite = TRUE)) }, 
                  error = function(e) message("Download error: ", e$message))
       }
       if (file.exists(dest_file)) downloaded_files[[var_name]][[year]] <- dest_file
@@ -62,14 +53,24 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
   ref_file <- downloaded_files[["TMIN"]][[years_needed[1]]]
   if(is.null(ref_file)) stop("Fatal: Could not find base TMIN file for spatial reference.")
   
-  r_ref <- rast(ref_file)
+  r_ref <- terra::rast(ref_file)
   
   # Ensure points are in GridMET CRS (EPSG:4326)
-  pts_sf <- st_transform(shapefile, 4326)
-  coords_mat <- st_coordinates(pts_sf)
+  if (inherits(shapefile, "sf")) {
+    pts_sf <- sf::st_transform(shapefile, 4326)
+  } else {
+    pts_sf <- sf::st_as_sf(shapefile, coords = c(lon_col, lat_col), crs = 4326)
+  }
+  coords_mat <- sf::st_coordinates(pts_sf)
+  
+  # Extract coordinates and IDs robustly
+  coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
+  ids <- coords_list$ids
+  lats <- coords_list$lats
+  lons <- coords_list$lons
   
   # Get the cell numbers for every point
-  all_cell_ids <- cellFromXY(r_ref, coords_mat)
+  all_cell_ids <- terra::cellFromXY(r_ref, coords_mat)
   
   # Check for points falling outside the US grid
   valid_mask <- !is.na(all_cell_ids)
@@ -114,7 +115,7 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
       
       for (yr in sorted_years) {
         fpath <- file_list[[yr]]
-        r <- rast(fpath)
+        r <- terra::rast(fpath)
         
         # KEY OPTIMIZATION: Extract only for current CHUNK of cells
         vals <- r[chunk_cell_ids] 
@@ -156,9 +157,9 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
     for (i in 1:length(chunk_indices)) {
       
       global_idx <- chunk_indices[i]
-      point_id <- shapefile[[id_col]][global_idx]
-      lat <- shapefile[[lat_col]][global_idx]
-      lon <- shapefile[[lon_col]][global_idx]
+      point_id <- ids[global_idx]
+      lat <- lats[global_idx]
+      lon <- lons[global_idx]
       
       out_f <- file.path(output_dir, paste0(point_id, ".WTH"))
       

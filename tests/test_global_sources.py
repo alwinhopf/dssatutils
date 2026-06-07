@@ -23,17 +23,17 @@ import shutil
 
 import pandas as pd
 
-# Make python_scripts importable regardless of cwd.
+# Make dssatutils importable regardless of cwd.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
-sys.path.insert(0, os.path.join(_REPO, "python_scripts"))
+sys.path.insert(0, os.path.join(_REPO, "python"))
 
-from weather_openmeteo import process_weather_openmeteo            # noqa: E402
+from dssatutils.weather_openmeteo import process_weather_openmeteo   # noqa: E402
 
 try:
     import geopandas as gpd                                          # noqa: E402
     from shapely.geometry import Point                               # noqa: E402
-    import soil_soilgrids_online as sg_online                        # noqa: E402
+    import dssatutils.soil_soilgrids_online as sg_online             # noqa: E402
     _HAVE_SOIL = True
 except Exception as exc:  # noqa: BLE001
     print(f"[warn] SoilGrids/geopandas not importable ({exc}); skipping soil test.")
