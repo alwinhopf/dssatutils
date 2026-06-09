@@ -19,6 +19,8 @@ import pandas as pd
 import requests
 import xarray as xr
 
+from typing import Dict, Tuple
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -74,7 +76,7 @@ def _download_nc(url: str, dest: str, timeout: int = 3600) -> bool:
 
 
 def _find_nearest_indices(ds: xr.Dataset, lons: np.ndarray,
-                           lats: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+                           lats: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Return arrays of integer (lat_idx, lon_idx) for each (lon, lat) pair.
     Returns NaN index where the point falls outside the dataset extent.
@@ -146,7 +148,7 @@ def process_weather_gridmet(
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     os.makedirs(gridmet_cache_dir, exist_ok=True)
-    downloaded: dict[str, dict[int, str]] = {v: {} for v in _GRIDMET_VARS}
+    downloaded: Dict[str, Dict[int, str]] = {v: {} for v in _GRIDMET_VARS}
 
     tasks = []
     for var_name, abbrev in _GRIDMET_VARS.items():
@@ -217,7 +219,7 @@ def process_weather_gridmet(
             continue
 
         # Build per-variable time-series matrices: shape (n_chunk_pts, n_days)
-        chunk_data: dict[str, np.ndarray] = {}
+        chunk_data: Dict[str, np.ndarray] = {}
 
         for var_name in _GRIDMET_VARS:
             year_arrays = []

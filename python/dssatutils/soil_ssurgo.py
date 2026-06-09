@@ -13,7 +13,7 @@ import os
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -89,7 +89,7 @@ def _format_in(values) -> str:
 # ---------------------------------------------------------------------------
 
 def _saxton_rawls(sand_pct: float, clay_pct: float, om_pct: float
-                  ) -> tuple[float, float, float]:
+                  ) -> Tuple[float, float, float]:
     """
     Compute SLLL (wilting point), SDUL (field capacity), SSAT (saturation)
     as volumetric water fractions using Saxton & Rawls (2006) equations.

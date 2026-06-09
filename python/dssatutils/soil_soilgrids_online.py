@@ -13,7 +13,7 @@ import re
 import time
 import warnings
 from datetime import datetime
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -38,7 +38,7 @@ _DEPTH_BOTTOMS = [5,   15,   30,   60,   100,   200]
 # ---------------------------------------------------------------------------
 
 def _calculate_soil_physics(sand_pct: float, clay_pct: float,
-                             om_pct: float) -> dict[str, float]:
+                             om_pct: float) -> Dict[str, float]:
     """
     Return SLLL (wilting point), SDUL (field capacity), SSAT (saturation)
     as volumetric fractions.  Mirrors ``calculate_soil_physics`` in R.
@@ -143,7 +143,7 @@ def _fetch_soilgrids_rest(lat: float, lon: float,
     Returns a tidy DataFrame: prop, depth_label, depth_bottom, depth_center, value.
     Mirrors ``fetch_soilgrids_rest`` in R.
     """
-    params: list[tuple] = [
+    params: List[Tuple] = [
         ("lat", lat), ("lon", lon), ("value", "mean"),
     ]
     for p in _PROPS:

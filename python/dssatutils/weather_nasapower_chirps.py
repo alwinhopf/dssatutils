@@ -28,6 +28,7 @@ import time
 import logging
 from datetime import date, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -56,7 +57,7 @@ _CHIRPS_NC_URL = (
 # ---------------------------------------------------------------------------
 
 def _download_chirps_year(year: int, res: str, cache_dir: str,
-                          timeout: int = 7200) -> str | None:
+                          timeout: int = 7200) -> Union[str, None]:
     """Download one CHIRPS yearly netCDF to *cache_dir* (skip if present).
 
     Returns the local path, or None on failure.

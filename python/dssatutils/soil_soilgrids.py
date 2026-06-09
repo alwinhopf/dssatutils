@@ -13,7 +13,7 @@
 import os
 import re
 import warnings
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -55,7 +55,7 @@ def _rewrite_header_id(header_line: str, new_id: str) -> str:
     return re.sub(r"^\*\S+", f"*{new_id}", header_line)
 
 
-def _parse_lat_lon(chunk: list[str]) -> tuple[Optional[float], Optional[float]]:
+def _parse_lat_lon(chunk: List[str]) -> Tuple[Optional[float], Optional[float]]:
     """
     Scan a small block of lines for the @SITE row and extract the first valid
     (lat, lon) pair from the following data line.
