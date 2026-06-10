@@ -117,8 +117,13 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
       hdr <- sprintf(
         "$WEATHER DATA: AgERA5 (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  AGE5 %8.4f %8.4f   -99 %5.1f %5.1f   2.0  10.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
         pid, lats[i], lons[i], tav, amp)
+      # Guard against values that would overflow a %6.1f field and shift every
+      # downstream column (see weather_nasapower.R). Local so it is visible in
+      # the parallel worker; corrupt readings become the DSSAT missing value.
+      clamp_wth <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
       lines <- with(wd, sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                                DATE, SRAD, TMAX, TMIN, RAIN, TDEW, RH2M, WIND))
+                                DATE, clamp_wth(SRAD), clamp_wth(TMAX), clamp_wth(TMIN),
+                                clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(WIND)))
       lines <- gsub("-99.0", "  -99", lines, fixed = TRUE)
       writeLines(c(hdr, lines), con = file.path(output_dir, sprintf("%s.WTH", pid)))
       written <- written + 1

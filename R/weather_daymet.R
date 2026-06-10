@@ -16,6 +16,9 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
   }
   
   cl <- parallel::makeCluster(n_cores)
+  # Safety net: release the cluster even if the download errors out before the
+  # explicit stopCluster() below. try() keeps it harmless on the normal path.
+  on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
   doParallel::registerDoParallel(cl)
   message(sprintf("Registered %d cores for parallel Daymet download.", n_cores))
   
@@ -90,10 +93,15 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
         point_id, latitude, longitude, tav, amp
       )
       
+      # Guard against values that would overflow a %6.1f field and shift every
+      # downstream column (see weather_nasapower.R). Local so it is visible in
+      # the parallel worker; corrupt readings become the DSSAT missing value.
+      clamp_wth <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
       weather_lines <- with(weather_data, {
         sprintf(
           "%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-          DATE, srad_mj, `tmax..deg.c.`, `tmin..deg.c.`, `prcp..mm.day.`, t_dew, rh_2m, wind
+          DATE, clamp_wth(srad_mj), clamp_wth(`tmax..deg.c.`), clamp_wth(`tmin..deg.c.`),
+          clamp_wth(`prcp..mm.day.`), clamp_wth(t_dew), clamp_wth(rh_2m), clamp_wth(wind)
         )
       })
       

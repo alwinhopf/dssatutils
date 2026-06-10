@@ -4,8 +4,8 @@ Shared **weather** and **soil** download utilities for DSSAT gridded / spatial
 crop-model pipelines. One versioned home for the download logic that was
 previously duplicated between:
 
-- **DSSAT Gridded Run Tutorial** (source of truth — R + Python)
-- **DSSAT ML Phenology Prediction** (R)
+- **DSSAT_Gridded_Run_Tutorial** (source of truth — R + Python)
+- **DSSAT_ML_Phenology_Prediction** (R)
 
 Each function fetches data from a public source and writes DSSAT-format
 `.WTH` (weather) or `.SOL` (soil) files for a set of grid points.

@@ -198,9 +198,14 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
           "$WEATHER DATA: GridMET Data (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n GMET  %8.4f %8.4f   -99 %5.1f %5.1f   -99   -99\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
           point_id, lat, lon, tav, amp
         )
+        # Guard against values that would overflow a %6.1f field and shift every
+        # downstream column (see weather_nasapower.R). Corrupt readings become
+        # the DSSAT missing value rather than a broken fixed-width row.
+        clamp_wth <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
         lines <- sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                         wth_data$DATE_FMT, wth_data$SRAD, wth_data$TMAX, wth_data$TMIN, 
-                         wth_data$RAIN, wth_data$TDEW, wth_data$RH2M, wth_data$WIND)
+                         wth_data$DATE_FMT, clamp_wth(wth_data$SRAD), clamp_wth(wth_data$TMAX),
+                         clamp_wth(wth_data$TMIN), clamp_wth(wth_data$RAIN), clamp_wth(wth_data$TDEW),
+                         clamp_wth(wth_data$RH2M), clamp_wth(wth_data$WIND))
         
         writeLines(c(header, gsub("-99.0", "  -99", lines, fixed=TRUE)), out_f)
         

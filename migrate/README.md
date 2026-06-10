@@ -9,8 +9,8 @@ inside the target repo.
 |---|---|---|
 | `00_create_remote.sh` | Create the **private** GitHub repo and push code + `v0.1.0` tag (gh or manual) | creates it |
 | `01_local_install_check.sh` | Smoke-test that the package imports in Python and all R files source cleanly | no |
-| `02_phase2_ml_phenology.sh` | Rewire **DSSAT ML Phenology Prediction**: remove duplicated scripts, add guarded `library(dssatutils)` | no¹ |
-| `03_phase3_gridded.sh` | Rewire **DSSAT Gridded Run Tutorial**: swap `source()`/imports for the package, delete moved files, keep landcover, add pins | no¹ |
+| `02_phase2_ml_phenology.sh` | Rewire **DSSAT_ML_Phenology_Prediction**: remove duplicated scripts, add guarded `library(dssatutils)` | no¹ |
+| `03_phase3_gridded.sh` | Rewire **DSSAT_Gridded_Run_Tutorial**: swap `source()`/imports for the package, delete moved files, keep landcover, add pins | no¹ |
 
 ¹ Phases 2 & 3 default to installing from `alwinhopf/dssatutils@v0.1.0` (needs the
 remote). To run them **before** the remote exists, install from the local path:
@@ -24,8 +24,8 @@ USE_LOCAL=1 ./migrate/03_phase3_gridded.sh
 ```bash
 ./migrate/01_local_install_check.sh          # verify package is sound
 ./migrate/00_create_remote.sh                # create private repo + push + tag
-./migrate/02_phase2_ml_phenology.sh          # then review: git -C "../DSSAT ML Phenology Prediction" diff
-./migrate/03_phase3_gridded.sh               # then review: git -C "../DSSAT Gridded Run Tutorial" diff
+./migrate/02_phase2_ml_phenology.sh          # then review: git -C "../DSSAT_ML_Phenology_Prediction" diff
+./migrate/03_phase3_gridded.sh               # then review: git -C "../DSSAT_Gridded_Run_Tutorial" diff
 ```
 
 After Phase 2, in R: `renv::init(); renv::snapshot()` (that repo had no lockfile).

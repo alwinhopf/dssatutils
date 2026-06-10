@@ -241,6 +241,9 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   if (.Platform$OS.type == "windows") {
     message(sprintf("Initializing cluster with %d cores...", n_cores))
     cl <- parallel::makeCluster(n_cores)
+    # Safety net: release the cluster even if processing errors out before the
+    # explicit stopCluster() later. try() keeps it harmless on the normal path.
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
     parallel::clusterEvalQ(cl, { library(soilDB); library(sf); library(dplyr); library(tidyr) })
     parallel::clusterExport(cl, varlist=c("process_point_wrapper", "robust_SDA_query", 
                                 "robust_SDA_spatialQuery", "calculate_soil_properties",

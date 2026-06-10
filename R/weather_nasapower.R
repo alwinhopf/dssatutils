@@ -17,9 +17,12 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     message(sprintf("End year is current year. Fetching data up to: %s", end_date_str))
   } else {
     end_date_str <- paste0(end_year, "-12-31")
-  }  # ← FIX 1: else block now properly closed before cluster setup
-  
+  }
+
   cl <- parallel::makeCluster(n_cores)
+  # Safety net: release the cluster even if the download errors out before the
+  # explicit stopCluster() below. try() keeps it harmless on the normal path.
+  on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
   doParallel::registerDoParallel(cl)
   message(sprintf("Registered %d cores for parallel NASA-POWER download.", n_cores))
   
@@ -38,7 +41,7 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     "T2MDEW",            # Dewpoint Temp (C)
     "RH2M",              # Relative Humidity (%)
     "WS2M"               # Wind speed at 2 m height (m/s)
-  )  # ← FIX 2: nasa_params vector now properly closed
+  )
   
   foreach(i = 1:nrow(shapefile), .packages = c("nasapower", "lubridate", "dplyr")) %dopar% {
     
@@ -49,7 +52,7 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     
     if (file.exists(output_file)) {
       return(NULL)
-    }  # ← FIX 3: if block properly closed
+    }
     
     tryCatch({
       
@@ -60,7 +63,7 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
         pars         = nasa_params,
         dates        = c(start_date_str, end_date_str),
         temporal_api = "DAILY"
-      )  # ← FIX 4: get_power() call properly closed
+      )
       
       # Check if data is empty
       if (nrow(power_data) == 0) {
@@ -105,10 +108,16 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
         point_id, latitude, longitude, tav, amp
       )
       
+      # Guard against values that would overflow a %6.1f field (>=9999.95 or
+      # <=-999.95) and shift every downstream column. Defined locally so it is
+      # always visible inside the parallel worker. Almost always a corrupt source
+      # value -> write the DSSAT missing indicator (-99) instead of a broken row.
+      clamp_wth <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
       weather_lines <- with(weather_data, {
         sprintf(
           "%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-          DATE, SRAD, TMAX, TMIN, RAIN, TDEW, RH2M, WIND
+          DATE, clamp_wth(SRAD), clamp_wth(TMAX), clamp_wth(TMIN),
+          clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(WIND)
         )
       })
       
