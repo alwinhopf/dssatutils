@@ -5,23 +5,31 @@
 
 
 
-# --- Wrapper for Retries ---
+# --- Wrappers for Retries ---
+# Return a STRUCTURED result: list(ok, data, error). Previously these returned
+# NULL on failure, discarding the actual error (network vs. server vs. bad SQL),
+# which made per-point failures impossible to diagnose. Callers can now report
+# the real reason a point produced no soil profile.
 robust_SDA_query <- function(query, max_retries = 3, retry_delay_seconds = 5) {
+  last_err <- NA_character_
   for (attempt in 1:max_retries) {
     result <- try(soilDB::SDA_query(query), silent = TRUE)
-    if (!inherits(result, "try-error")) return(result)
+    if (!inherits(result, "try-error")) return(list(ok = TRUE, data = result, error = NA_character_))
+    last_err <- trimws(as.character(result))
     Sys.sleep(retry_delay_seconds)
   }
-  return(NULL)
+  list(ok = FALSE, data = NULL, error = last_err)
 }
 
 robust_SDA_spatialQuery <- function(point_sf, what, max_retries = 3, retry_delay_seconds = 5) {
+  last_err <- NA_character_
   for (attempt in 1:max_retries) {
     result <- try(soilDB::SDA_spatialQuery(point_sf, what = what), silent = TRUE)
-    if (!inherits(result, "try-error")) return(result)
+    if (!inherits(result, "try-error")) return(list(ok = TRUE, data = result, error = NA_character_))
+    last_err <- trimws(as.character(result))
     Sys.sleep(retry_delay_seconds)
   }
-  return(NULL)
+  list(ok = FALSE, data = NULL, error = last_err)
 }
 
 # --- Calculation Logic ---
@@ -144,90 +152,110 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   }
   
   # --- Worker Function ---
+  # Returns the per-layer results data.frame on SUCCESS, or a tagged failure
+  # record list(.fail=TRUE, ID, latitude, longitude, reason) on FAILURE. The
+  # reason is prefixed with a category ("network:", "no-coverage:", "no-soil:",
+  # "no-layers:") so the main process can tally and log exactly why each point
+  # produced no .SOL — instead of the old silent return(NULL).
   process_point_wrapper <- function(point_data_row) {
-    ID <- as.character(point_data_row[[id_col]])
-    
-    # Reconstruct sf object for spatial query
-    # We assume WGS84 (EPSG:4326) because previous steps transformed it
-    point_sf <- sf::st_as_sf(point_data_row, coords = c(long_col, lat_col), crs = 4326) 
-    
-    # 1. Spatial Query
-    soil_data_query <- robust_SDA_spatialQuery(point_sf, what = 'mukey')
-    if (is.null(soil_data_query)) return(NULL)
-    
-    # 2. Bedrock & Properties
-    if (length(soil_data_query$mukey) > 0 && !all(is.na(soil_data_query$mukey))) {
-      q_bedrock <- sprintf("SELECT mukey, brockdepmin FROM muaggatt WHERE mukey IN %s",
-                           format_sql_func(soil_data_query$mukey))
-      bedrock_data <- robust_SDA_query(q_bedrock)
-      
-      bedrock_depth <- 200 # Default
-      if (!is.null(bedrock_data)) {
-        bd <- as.data.frame(bedrock_data)
-        if(nrow(bd) > 0 && !all(is.na(bd$brockdepmin))) bedrock_depth <- min(bd$brockdepmin, na.rm=TRUE)
-      }
-      if (is.infinite(bedrock_depth)) bedrock_depth <- 200
-      
-      # Define Layers
-      all_layers <- list("0-5cm"=c(0,5), "5-20cm"=c(5,20), "20-35cm"=c(20,35),
-                         "35-50cm"=c(35,50), "50-65cm"=c(50,65), "65-80cm"=c(65,80),
-                         "80-95cm"=c(80,95), "95-110cm"=c(95,110), "110-125cm"=c(110,125),
-                         "125-140cm"=c(125,140), "140-155cm"=c(140,155), "155-170cm"=c(155,170),
-                         "170-185cm"=c(170,185), "185-200cm"=c(185,200))
-      
-      valid_layers <- all_layers[sapply(all_layers, function(x) x[1] < bedrock_depth)]
-      if(length(valid_layers) > 0) {
-        last <- length(valid_layers)
-        if(valid_layers[[last]][2] > bedrock_depth) valid_layers[[last]][2] <- bedrock_depth
-        names(valid_layers)[last] <- paste0(valid_layers[[last]][1], "-", valid_layers[[last]][2], "cm")
-      } else {
-        valid_layers <- list()
-        valid_layers[[paste0("0-", bedrock_depth, "cm")]] <- c(0, bedrock_depth)
-      }
-      
-      # Query Properties
-      q_soil <- sprintf("SELECT component.mukey, component.cokey, component.comppct_r,
-                         chorizon.hzdept_r, chorizon.hzdepb_r, chorizon.claytotal_r,
-                         chorizon.sandtotal_r, chorizon.om_r, chorizon.dbthirdbar_r
-                         FROM component INNER JOIN chorizon ON component.cokey = chorizon.cokey
-                         WHERE component.mukey IN %s", format_sql_func(soil_data_query$mukey))
-      
-      props <- robust_SDA_query(q_soil)
-      if(is.null(props)) return(NULL)
-      props <- as.data.frame(props)
-      if(nrow(props) == 0) return(NULL)
-      
-      # Calc Props per Layer
-      results_list <- lapply(names(valid_layers), function(layer_name) {
-        d <- valid_layers[[layer_name]]
-        cp <- calculate_soil_properties(props, d[1], d[2])
-        if(nrow(cp) > 0) cp$depth_range <- layer_name
-        return(cp)
-      })
-      results_list <- results_list[sapply(results_list, function(x) !is.null(x) && nrow(x) > 0)]
-      
-      if(length(results_list) > 0) {
-        results_df <- do.call(rbind, results_list)
-        # Add derived DSSAT physics
-        results_df <- results_df %>% dplyr::mutate(
-          ID=ID, longitude=point_data_row[[long_col]], latitude=point_data_row[[lat_col]],
-          bedrock_depth_cm=bedrock_depth,
-          sand_dec=sand_pct/100, clay_dec=clay_pct/100, om_dec=om_pct/100,
-          theta_1500t = -0.024*sand_dec + 0.487*clay_dec + 0.006*om_dec + 0.005*(sand_dec*om_dec) - 0.013*(clay_dec*om_dec) + 0.068*(sand_dec*clay_dec) + 0.031,
-          SLLL = theta_1500t + (0.14*theta_1500t - 0.02),
-          theta_33t = -0.251*sand_dec + 0.195*clay_dec + 0.011*om_dec + 0.006*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) + 0.452*(sand_dec*clay_dec) + 0.299,
-          SDUL = theta_33t + (1.283*(theta_33t)^2 - 0.374*theta_33t - 0.015),
-          theta_s33t = 0.278*sand_dec + 0.034*clay_dec + 0.022*om_dec - 0.018*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) - 0.584*(sand_dec*clay_dec) + 0.078,
-          theta_s33 = theta_s33t + (0.636*theta_s33t - 0.107),
-          SSAT = SDUL + theta_s33 - 0.097*sand_dec + 0.043
-        )
-        
-        # WRITE .SOL FILE IMMEDIATELY
-        format_dssat_soil_single(results_df, output_dir_individual)
-        return(results_df)
-      }
+    ID   <- as.character(point_data_row[[id_col]])
+    LATv <- point_data_row[[lat_col]]
+    LONv <- point_data_row[[long_col]]
+    fail <- function(reason) list(.fail = TRUE, ID = ID,
+                                  latitude = LATv, longitude = LONv, reason = reason)
+
+    # Reconstruct sf object for spatial query (WGS84; earlier steps reprojected)
+    point_sf <- sf::st_as_sf(point_data_row, coords = c(long_col, lat_col), crs = 4326)
+
+    # 1. Spatial query -> map unit key(s)
+    sp <- robust_SDA_spatialQuery(point_sf, what = 'mukey')
+    if (!isTRUE(sp$ok))
+      return(fail(sprintf("network: SDA spatial query failed after retries (%s)",
+                          if (is.na(sp$error)) "no detail" else sp$error)))
+    soil_data_query <- sp$data
+    if (is.null(soil_data_query) || !("mukey" %in% names(soil_data_query)) ||
+        length(soil_data_query$mukey) == 0 || all(is.na(soil_data_query$mukey)))
+      return(fail("no-coverage: no SSURGO map unit at this location (outside surveyed area / offshore)"))
+
+    muname <- if ("muname" %in% names(soil_data_query))
+                paste(unique(stats::na.omit(soil_data_query$muname)), collapse = "; ") else NA_character_
+
+    # 2. Bedrock depth (optional; default 200 cm when unavailable)
+    q_bedrock <- sprintf("SELECT mukey, brockdepmin FROM muaggatt WHERE mukey IN %s",
+                         format_sql_func(soil_data_query$mukey))
+    bq <- robust_SDA_query(q_bedrock)
+    bedrock_depth <- 200
+    if (isTRUE(bq$ok) && !is.null(bq$data)) {
+      bd <- as.data.frame(bq$data)
+      if (nrow(bd) > 0 && !all(is.na(bd$brockdepmin))) bedrock_depth <- min(bd$brockdepmin, na.rm = TRUE)
     }
-    return(NULL)
+    if (is.infinite(bedrock_depth)) bedrock_depth <- 200
+
+    # Define Layers
+    all_layers <- list("0-5cm"=c(0,5), "5-20cm"=c(5,20), "20-35cm"=c(20,35),
+                       "35-50cm"=c(35,50), "50-65cm"=c(50,65), "65-80cm"=c(65,80),
+                       "80-95cm"=c(80,95), "95-110cm"=c(95,110), "110-125cm"=c(110,125),
+                       "125-140cm"=c(125,140), "140-155cm"=c(140,155), "155-170cm"=c(155,170),
+                       "170-185cm"=c(170,185), "185-200cm"=c(185,200))
+
+    valid_layers <- all_layers[sapply(all_layers, function(x) x[1] < bedrock_depth)]
+    if(length(valid_layers) > 0) {
+      last <- length(valid_layers)
+      if(valid_layers[[last]][2] > bedrock_depth) valid_layers[[last]][2] <- bedrock_depth
+      names(valid_layers)[last] <- paste0(valid_layers[[last]][1], "-", valid_layers[[last]][2], "cm")
+    } else {
+      valid_layers <- list()
+      valid_layers[[paste0("0-", bedrock_depth, "cm")]] <- c(0, bedrock_depth)
+    }
+
+    # 3. Horizon properties
+    q_soil <- sprintf("SELECT component.mukey, component.cokey, component.comppct_r,
+                       chorizon.hzdept_r, chorizon.hzdepb_r, chorizon.claytotal_r,
+                       chorizon.sandtotal_r, chorizon.om_r, chorizon.dbthirdbar_r
+                       FROM component INNER JOIN chorizon ON component.cokey = chorizon.cokey
+                       WHERE component.mukey IN %s", format_sql_func(soil_data_query$mukey))
+
+    pq <- robust_SDA_query(q_soil)
+    if (!isTRUE(pq$ok))
+      return(fail(sprintf("network: soil-properties query failed after retries (%s)",
+                          if (is.na(pq$error)) "no detail" else pq$error)))
+    props <- as.data.frame(pq$data)
+    if (nrow(props) == 0)
+      return(fail(sprintf("no-soil: map unit has no soil horizons%s — typically Water / Urban / Pits / Rock outcrop (mukey %s)",
+                          if (!is.na(muname) && nzchar(muname)) sprintf(" [%s]", muname) else "",
+                          paste(soil_data_query$mukey, collapse = ","))))
+
+    # Calc Props per Layer
+    results_list <- lapply(names(valid_layers), function(layer_name) {
+      d <- valid_layers[[layer_name]]
+      cp <- calculate_soil_properties(props, d[1], d[2])
+      if(nrow(cp) > 0) cp$depth_range <- layer_name
+      return(cp)
+    })
+    results_list <- results_list[sapply(results_list, function(x) !is.null(x) && nrow(x) > 0)]
+
+    if (length(results_list) == 0)
+      return(fail(sprintf("no-layers: horizon data present but no usable layers after depth filtering (bedrock %s cm; muname %s)",
+                          bedrock_depth, if (!is.na(muname)) muname else "NA")))
+
+    results_df <- do.call(rbind, results_list)
+    # Add derived DSSAT physics
+    results_df <- results_df %>% dplyr::mutate(
+      ID=ID, longitude=point_data_row[[long_col]], latitude=point_data_row[[lat_col]],
+      bedrock_depth_cm=bedrock_depth,
+      sand_dec=sand_pct/100, clay_dec=clay_pct/100, om_dec=om_pct/100,
+      theta_1500t = -0.024*sand_dec + 0.487*clay_dec + 0.006*om_dec + 0.005*(sand_dec*om_dec) - 0.013*(clay_dec*om_dec) + 0.068*(sand_dec*clay_dec) + 0.031,
+      SLLL = theta_1500t + (0.14*theta_1500t - 0.02),
+      theta_33t = -0.251*sand_dec + 0.195*clay_dec + 0.011*om_dec + 0.006*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) + 0.452*(sand_dec*clay_dec) + 0.299,
+      SDUL = theta_33t + (1.283*(theta_33t)^2 - 0.374*theta_33t - 0.015),
+      theta_s33t = 0.278*sand_dec + 0.034*clay_dec + 0.022*om_dec - 0.018*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) - 0.584*(sand_dec*clay_dec) + 0.078,
+      theta_s33 = theta_s33t + (0.636*theta_s33t - 0.107),
+      SSAT = SDUL + theta_s33 - 0.097*sand_dec + 0.043
+    )
+
+    # WRITE .SOL FILE IMMEDIATELY
+    format_dssat_soil_single(results_df, output_dir_individual)
+    return(results_df)
   }
   
   # --- CHUNK SETUP ---
@@ -255,39 +283,73 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   }
   
   # --- 2. CHUNKED LOOP ---
+  all_fails <- list()  # accumulates per-point failure records across chunks
   for (i in 1:num_chunks) {
     start_idx <- (i - 1) * CHUNK_SIZE + 1
     end_idx <- min(i * CHUNK_SIZE, total_points)
-    
+
     message(sprintf("  > Chunk %d/%d (Points %d - %d)", i, num_chunks, start_idx, end_idx))
-    
+
     chunk_data <- points_to_process[start_idx:end_idx, ]
     chunk_list <- split(chunk_data, seq(nrow(chunk_data)))
-    
+
     # Run Parallel on Chunk
     chunk_results <- pbapply::pblapply(chunk_list, process_point_wrapper, cl = cl)
-    
-    # Filter NULLs and Combine
-    valid_results <- chunk_results[!sapply(chunk_results, is.null)]
-    
+
+    # Separate tagged failure records from successful per-layer data frames.
+    is_fail <- function(x) is.list(x) && isTRUE(x[[".fail"]])
+    all_fails     <- c(all_fails, Filter(is_fail, chunk_results))
+    valid_results <- Filter(function(x) !is.null(x) && !is_fail(x), chunk_results)
+
     if(length(valid_results) > 0) {
       chunk_df <- dplyr::bind_rows(valid_results)
-      
+
       # Write to CSV (Append Mode)
       readr::write_csv(chunk_df, output_dir_csv, append = file.exists(output_dir_csv))
     }
-    
+
     # --- CRITICAL: CLEAR MEMORY ---
     rm(chunk_list, chunk_results, valid_results)
     if(exists("chunk_df")) rm(chunk_df)
-    gc() 
+    gc()
   }
-  
+
   # --- 3. CLEANUP ---
   if (.Platform$OS.type == "windows") {
     parallel::stopCluster(cl)
   }
-  
+
+  # --- 4. FAILURE REPORT ---
+  # Explain, per point, IF and WHY no soil profile was produced — written next to
+  # the soil CSV so missing .SOL files are auditable instead of silent.
+  if (length(all_fails) > 0) {
+    fail_df <- data.frame(
+      ID        = vapply(all_fails, function(f) as.character(f$ID), character(1)),
+      latitude  = vapply(all_fails, function(f) suppressWarnings(as.numeric(f$latitude)),  numeric(1)),
+      longitude = vapply(all_fails, function(f) suppressWarnings(as.numeric(f$longitude)), numeric(1)),
+      reason    = vapply(all_fails, function(f) as.character(f$reason), character(1)),
+      stringsAsFactors = FALSE
+    )
+    failure_log <- file.path(dirname(output_dir_csv),
+        paste0(tools::file_path_sans_ext(basename(output_dir_csv)), "_download_failures.csv"))
+    readr::write_csv(fail_df, failure_log)
+
+    message(sprintf("[SSURGO] %d of %d processed point(s) produced NO soil profile:",
+                    nrow(fail_df), total_points))
+    cats <- sub(":.*$", "", fail_df$reason)
+    tb <- sort(table(cats), decreasing = TRUE)
+    for (nm in names(tb)) message(sprintf("   - %-13s %d   (%s)", paste0(nm, ":"), tb[[nm]],
+        switch(nm,
+          "network"     = "transient SDA/server/timeout — re-run to retry these",
+          "no-coverage" = "no SSURGO map unit here (outside survey area / offshore)",
+          "no-soil"     = "non-soil map unit (Water, Urban, Pits, Rock) — no horizons exist",
+          "no-layers"   = "horizons present but unusable after depth filtering",
+          "other")))
+    message(sprintf("   Per-point details (ID, lat, long, reason) -> %s", failure_log))
+  } else {
+    message("[SSURGO] All processed points produced a soil profile.")
+  }
+
   message("SSURGO Processing Complete.")
-  return(TRUE) 
+  return(TRUE)
 }
