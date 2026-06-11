@@ -39,8 +39,13 @@ _LAYER_RANGES = [
 # SDA query helpers
 # ---------------------------------------------------------------------------
 
-def _sda_query(sql: str, max_retries: int = 3, delay: float = 5.0) -> Optional[pd.DataFrame]:
-    """POST a SQL query to SDA and return a DataFrame, or None on failure."""
+def _sda_query_result(sql: str, max_retries: int = 3, delay: float = 5.0) -> dict:
+    """POST a SQL query to SDA and return {ok, data, error}.
+
+    Keep the original error text so per-point SSURGO failures can be logged with
+    useful causes instead of disappearing as silent ``None`` values.
+    """
+    last_error = None
     for attempt in range(max_retries):
         try:
             r = requests.post(
@@ -52,16 +57,23 @@ def _sda_query(sql: str, max_retries: int = 3, delay: float = 5.0) -> Optional[p
             payload = r.json()
             table = payload.get("Table")
             if not table:
-                return None
+                return {"ok": True, "data": None, "error": None}
             rows = table[1:]  # first row is headers
             cols = table[0]
-            return pd.DataFrame(rows, columns=cols)
+            return {"ok": True, "data": pd.DataFrame(rows, columns=cols), "error": None}
         except Exception as exc:
+            last_error = str(exc)
             if attempt < max_retries - 1:
                 time.sleep(delay)
-            else:
-                warnings.warn(f"SDA query failed: {exc}")
-                return None
+    return {"ok": False, "data": None, "error": last_error or "unknown SDA query error"}
+
+
+def _sda_query(sql: str, max_retries: int = 3, delay: float = 5.0) -> Optional[pd.DataFrame]:
+    """POST a SQL query to SDA and return a DataFrame, or None on failure."""
+    res = _sda_query_result(sql, max_retries=max_retries, delay=delay)
+    if not res["ok"] and res["error"]:
+        warnings.warn(f"SDA query failed: {res['error']}")
+    return res["data"]
 
 
 def _sda_spatial_mukeys(lat: float, lon: float,
@@ -73,6 +85,30 @@ def _sda_spatial_mukeys(lat: float, lon: float,
     if df is None or df.empty:
         return None
     return df["mukey"].dropna().tolist()
+
+
+def _mapunit_names(mukeys) -> dict:
+    """Return mukey -> muname for diagnostics when a map unit has no horizons."""
+    df = _sda_query(
+        f"SELECT mukey, muname FROM mapunit WHERE mukey IN {_format_in(mukeys)}"
+    )
+    if df is None or df.empty or "muname" not in df.columns:
+        return {}
+    return {
+        str(row["mukey"]): str(row["muname"])
+        for _, row in df.iterrows()
+        if pd.notna(row.get("mukey"))
+    }
+
+
+def _failure(ID: str, lat: float, lon: float, reason: str) -> dict:
+    return {
+        "_fail": True,
+        "ID": ID,
+        "latitude": lat,
+        "longitude": lon,
+        "reason": reason,
+    }
 
 
 def _format_in(values) -> str:
@@ -207,7 +243,7 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
 # Per-point worker
 # ---------------------------------------------------------------------------
 
-def _process_point(args: dict) -> Optional[pd.DataFrame]:
+def _process_point(args: dict):
     """Query SSURGO for one point and write its .SOL file."""
     ID = args["ID"]
     lat = args["lat"]
@@ -219,9 +255,18 @@ def _process_point(args: dict) -> Optional[pd.DataFrame]:
         return None
 
     # 1. Spatial query → mukeys
-    mukeys = _sda_spatial_mukeys(lat, lon)
+    wkt = f"POINT({lon} {lat})"
+    spatial_res = _sda_query_result(
+        f"SELECT mukey FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('{wkt}')"
+    )
+    if not spatial_res["ok"]:
+        return _failure(ID, lat, lon, f"network: SDA spatial query failed ({spatial_res['error']})")
+    spatial_df = spatial_res["data"]
+    if spatial_df is None or spatial_df.empty:
+        return _failure(ID, lat, lon, "no-coverage: no SSURGO map unit at this location (outside surveyed area / offshore)")
+    mukeys = spatial_df["mukey"].dropna().tolist()
     if not mukeys:
-        return None
+        return _failure(ID, lat, lon, "no-coverage: no SSURGO mukey returned at this location")
 
     # 2. Bedrock depth
     q_bed = (
@@ -251,9 +296,21 @@ def _process_point(args: dict) -> Optional[pd.DataFrame]:
         "FROM component INNER JOIN chorizon ON component.cokey = chorizon.cokey "
         f"WHERE component.mukey IN {_format_in(mukeys)}"
     )
-    props_df = _sda_query(q_prop)
+    prop_res = _sda_query_result(q_prop)
+    if not prop_res["ok"]:
+        return _failure(ID, lat, lon, f"network: SDA horizon query failed ({prop_res['error']})")
+    props_df = prop_res["data"]
     if props_df is None or props_df.empty:
-        return None
+        names = _mapunit_names(mukeys)
+        muname = "; ".join(
+            sorted({v for v in names.values() if v and v.lower() != "nan"})
+        )
+        mukey_label = ", ".join(map(str, mukeys))
+        suffix = f" [{muname}]" if muname else ""
+        return _failure(
+            ID, lat, lon,
+            f"no-soil: map unit has no soil horizons{suffix} — typically Water / Urban / Pits / Rock outcrop (mukey {mukey_label})",
+        )
 
     # Coerce numeric columns
     for col in ["hzdept_r", "hzdepb_r", "claytotal_r", "sandtotal_r",
@@ -282,7 +339,14 @@ def _process_point(args: dict) -> Optional[pd.DataFrame]:
         })
 
     if not layer_rows:
-        return None
+        names = _mapunit_names(mukeys)
+        muname = "; ".join(
+            sorted({v for v in names.values() if v and v.lower() != "nan"})
+        )
+        return _failure(
+            ID, lat, lon,
+            f"no-layers: horizon data present but no usable layers after depth filtering (bedrock {bedrock_depth:g} cm; muname {muname or 'unknown'})",
+        )
 
     profile_df = pd.DataFrame(layer_rows)
     _write_sol(profile_df, output_dir)
@@ -346,6 +410,7 @@ def process_soils_ssurgo(
     print(f"Processing {n_proc} points in {num_chunks} chunk(s)...")
 
     csv_header_written = os.path.exists(output_dir_csv)
+    failures = []
 
     for chunk_i in range(num_chunks):
         s = chunk_i * CHUNK_SIZE
@@ -372,10 +437,12 @@ def process_soils_ssurgo(
                 pid = future_map[fut]
                 try:
                     res = fut.result()
-                    if res is not None:
+                    if isinstance(res, dict) and res.get("_fail"):
+                        failures.append(res)
+                    elif res is not None:
                         results.append(res)
                 except Exception as exc:
-                    warnings.warn(f"Point {pid} failed: {exc}")
+                    failures.append(_failure(str(pid), math.nan, math.nan, f"network: worker failed ({exc})"))
 
         if results:
             chunk_df = pd.concat(results, ignore_index=True)
@@ -386,6 +453,28 @@ def process_soils_ssurgo(
                 header=not csv_header_written,
             )
             csv_header_written = True
+
+    if failures:
+        fail_df = pd.DataFrame(failures)[["ID", "latitude", "longitude", "reason"]]
+        base = os.path.splitext(os.path.basename(output_dir_csv))[0]
+        failure_log = os.path.join(
+            os.path.dirname(output_dir_csv),
+            f"{base}_download_failures.csv",
+        )
+        fail_df.to_csv(failure_log, index=False)
+
+        categories = fail_df["reason"].str.split(":", n=1).str[0].fillna("unknown")
+        counts = categories.value_counts().to_dict()
+        labels = {
+            "network": "SDA request failed after retries",
+            "no-coverage": "no SSURGO map unit here (outside survey area / offshore)",
+            "no-soil": "non-soil map unit (Water, Urban, Pits, Rock) — no horizons exist",
+            "no-layers": "horizons present but unusable after depth filtering",
+        }
+        print(f"[SSURGO] {len(fail_df)} of {n_proc} processed point(s) produced NO soil profile:")
+        for key in sorted(counts):
+            print(f"   - {key:<12} {counts[key]:4d}   ({labels.get(key, 'see failure CSV')})")
+        print(f"   Per-point details (ID, lat, long, reason) -> {failure_log}")
 
     print("SSURGO Processing Complete.")
     return True
