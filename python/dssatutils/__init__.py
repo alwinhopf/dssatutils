@@ -24,7 +24,14 @@ _EXPORTS = {
     "process_soils_soilgrids": "soil_soilgrids",
     "process_soils_soilgrids_online": "soil_soilgrids_online",
     "process_soils_ssurgo": "soil_ssurgo",
+    "process_soils_gnatsgo": "soil_gnatsgo",
+    "process_soils_isdasoil": "soil_isdasoil",
+    "process_soils_lucas": "soil_lucas",
     "process_soils_hwsd": "soil_hwsd",
+    "process_weather_eobs": "weather_eobs",
+    "process_weather_dwd": "weather_dwd",
+    "process_weather_xavier": "weather_xavier",
+    "process_weather_cmfd": "weather_cmfd",
 }
 
 __all__ = list(_EXPORTS)

@@ -10,7 +10,10 @@
 # ACCESS: HWSD2 is not a streaming API — download it once from FAO and point
 # the pipeline at the two files (mirrors the SOILGRIDS_10K external-file model):
 #   • HWSD2 raster of mapping-unit IDs (GeoTIFF / BIL): `hwsd_raster_file`
-#   • HWSD2 attribute database (SQLite .sqlite/.db):     `hwsd_db_file`
+#   • HWSD2 attribute database: `hwsd_db_file` — either the FAO Microsoft Access
+#     download directly (`.mdb` / `.accdb`, read via pyodbc + the Access ODBC
+#     driver) OR a converted SQLite file (`.sqlite` / `.db`, read with the stdlib,
+#     no extra deps). The backend is chosen from the file extension.
 #   FAO HWSD v2.0: https://www.fao.org/soils-portal/data-hub/soil-maps-and-databases/harmonized-world-soil-database-v2-0/
 #
 # This samples the raster at each point to get the HWSD2 mapping-unit (SMU) ID,
@@ -60,21 +63,81 @@ def _resolve_columns(df: pd.DataFrame) -> dict:
     return out
 
 
-def _find_layer_table(conn: sqlite3.Connection) -> str:
-    names = pd.read_sql_query(
-        "SELECT name FROM sqlite_master WHERE type IN ('table','view')", conn
-    )["name"].tolist()
+def _pick_layer_table(names, col_getter) -> str:
+    """Choose the HWSD2 layer table from *names*: a known name first, else the
+    first table that has a SAND column (queried lazily via *col_getter(name)*)."""
     lower = {n.lower(): n for n in names}
     for cand in _LAYER_TABLE_CANDIDATES:
         if cand.lower() in lower:
             return lower[cand.lower()]
-    # Fall back to the first table that has a SAND-like column.
     for n in names:
-        cols = pd.read_sql_query(f"SELECT * FROM '{n}' LIMIT 1", conn).columns
-        if any(c.lower() == "sand" for c in cols):
-            return n
+        try:
+            if any(c.lower() == "sand" for c in col_getter(n)):
+                return n
+        except Exception:  # noqa: BLE001
+            continue
     raise RuntimeError(
         f"Could not find an HWSD2 layer table in the DB. Tables: {names}")
+
+
+def _find_layer_table(conn: sqlite3.Connection) -> str:
+    names = pd.read_sql_query(
+        "SELECT name FROM sqlite_master WHERE type IN ('table','view')", conn
+    )["name"].tolist()
+    return _pick_layer_table(
+        names, lambda n: list(pd.read_sql_query(f"SELECT * FROM '{n}' LIMIT 1", conn).columns))
+
+
+def _access_driver():
+    """Return the installed Microsoft Access ODBC driver name, or None."""
+    import pyodbc
+    return next((d for d in pyodbc.drivers() if "Microsoft Access Driver" in d), None)
+
+
+def _load_hwsd_layer_table(hwsd_db_file: str) -> pd.DataFrame:
+    """Load the full HWSD2 layer table from whatever database `hwsd_db_file` is:
+
+    * ``.sqlite`` / ``.db``   -> read via the stdlib ``sqlite3`` (no extra deps).
+    * ``.mdb`` / ``.accdb``   -> read the FAO Microsoft Access file *directly* via
+      ``pyodbc`` + the Microsoft Access ODBC driver (so you can point straight at
+      the FAO download without a manual conversion step).
+    """
+    ext = os.path.splitext(hwsd_db_file)[1].lower()
+    if ext in (".mdb", ".accdb"):
+        try:
+            import pyodbc
+        except ImportError as exc:
+            raise ImportError(
+                "Reading an Access (.mdb/.accdb) HWSD database needs the 'pyodbc' "
+                "package plus the Microsoft Access ODBC driver. Install pyodbc, or "
+                "convert the .mdb to .sqlite.") from exc
+        driver = _access_driver()
+        if not driver:
+            raise RuntimeError(
+                "No 'Microsoft Access Driver' ODBC driver is installed, so the .mdb "
+                "cannot be read. Install the Microsoft Access Database Engine "
+                "redistributable (matching your Python bitness), or convert the .mdb "
+                "to .sqlite.")
+        conn = pyodbc.connect(
+            f"DRIVER={{{driver}}};DBQ={os.path.abspath(hwsd_db_file)};")
+        try:
+            cur = conn.cursor()
+            names = [t.table_name for t in cur.tables(tableType="TABLE")]
+            table = _pick_layer_table(
+                names, lambda n: [c.column_name for c in conn.cursor().columns(table=n)])
+            cur.execute(f"SELECT * FROM [{table}]")
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+            return pd.DataFrame.from_records([tuple(r) for r in rows], columns=cols)
+        finally:
+            conn.close()
+    # Default: SQLite.
+    conn = sqlite3.connect(hwsd_db_file)
+    try:
+        table = _find_layer_table(conn)
+        return pd.read_sql_query(f"SELECT * FROM '{table}'", conn)
+    finally:
+        conn.close()
 
 
 def _sample_smu_ids(raster_file: str, lons, lats) -> np.ndarray:
@@ -137,13 +200,8 @@ def process_soils_hwsd(
     # 1. Sample HWSD2 SMU IDs at each point.
     smu_ids = _sample_smu_ids(hwsd_raster_file, lons, lats)
 
-    # 2. Load the layer table once; resolve schema columns.
-    conn = sqlite3.connect(hwsd_db_file)
-    try:
-        table = _find_layer_table(conn)
-        layers = pd.read_sql_query(f"SELECT * FROM '{table}'", conn)
-    finally:
-        conn.close()
+    # 2. Load the layer table once (SQLite or Access .mdb); resolve schema columns.
+    layers = _load_hwsd_layer_table(hwsd_db_file)
     cols = _resolve_columns(layers)
     required = ["smu", "sand", "clay", "bot"]
     missing = [k for k in required if k not in cols]

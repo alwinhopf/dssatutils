@@ -28,3 +28,8 @@ weather_cache/
 
 # OS
 .DS_Store
+
+# Credentials / API keys (never commit) — Copernicus CDS, etc.
+.cdsapirc
+*.cdsapirc
+.env

@@ -36,10 +36,17 @@ def test_module_imports():
         "dssatutils.weather_openmeteo",
         "dssatutils.weather_nasapower_chirps",
         "dssatutils.weather_agera5",
+        "dssatutils.weather_dwd",
+        "dssatutils.weather_eobs",
+        "dssatutils.weather_xavier",
+        "dssatutils.weather_cmfd",
         "dssatutils.soil_hwsd",
         "dssatutils.soil_soilgrids",
         "dssatutils.soil_soilgrids_online",
         "dssatutils.soil_ssurgo",
+        "dssatutils.soil_gnatsgo",
+        "dssatutils.soil_isdasoil",
+        "dssatutils.soil_lucas",
     ]
     for mod in modules:
         try:
@@ -120,10 +127,17 @@ def _run_standalone():
         "dssatutils.weather_openmeteo",
         "dssatutils.weather_nasapower_chirps",
         "dssatutils.weather_agera5",
+        "dssatutils.weather_dwd",
+        "dssatutils.weather_eobs",
+        "dssatutils.weather_xavier",
+        "dssatutils.weather_cmfd",
         "dssatutils.soil_hwsd",
         "dssatutils.soil_soilgrids",
         "dssatutils.soil_soilgrids_online",
         "dssatutils.soil_ssurgo",
+        "dssatutils.soil_gnatsgo",
+        "dssatutils.soil_isdasoil",
+        "dssatutils.soil_lucas",
     ]
     for mod in modules:
         try:
