@@ -28,8 +28,11 @@ dependencies = [
 [project.optional-dependencies]
 # AgERA5 needs a free Copernicus CDS API key + the cdsapi client.
 agera5 = ["cdsapi>=0.7"]
-# Everything optional (AgERA5 + anything added later).
-all = ["cdsapi>=0.7"]
+# HWSD only needs pyodbc when hwsd_db_file points at the FAO Microsoft Access
+# .mdb directly (plus the OS Microsoft Access ODBC driver). Not needed for .sqlite.
+hwsd = ["pyodbc>=4.0"]
+# Everything optional (AgERA5 + HWSD .mdb + anything added later).
+all = ["cdsapi>=0.7", "pyodbc>=4.0"]
 dev = ["pytest>=7.0"]
 
 [project.urls]

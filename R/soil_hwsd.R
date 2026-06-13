@@ -7,7 +7,10 @@
 # streaming API: download it once from FAO and point the pipeline at two files
 # (mirrors the SOILGRIDS_10K external-file model):
 #   * hwsd_raster_file : HWSD2 raster of mapping-unit (SMU) IDs (GeoTIFF/BIL)
-#   * hwsd_db_file     : HWSD2 attribute database (SQLite)
+#   * hwsd_db_file     : HWSD2 attribute database — either the FAO Microsoft
+#       Access download directly (.mdb/.accdb, via the 'odbc' or 'RODBC' package +
+#       the Access ODBC driver) OR a converted SQLite file (.sqlite/.db). The
+#       backend is chosen from the file extension.
 #   FAO HWSD v2.0: https://www.fao.org/soils-portal/data-hub/soil-maps-and-databases/harmonized-world-soil-database-v2-0/
 #
 # Samples the raster at each point to get the SMU ID, looks up the dominant
@@ -35,15 +38,63 @@
   NA_character_
 }
 
+# Load the full HWSD2 layer table from whatever database `hwsd_db_file` points at:
+#   * .sqlite / .db    -> DBI + RSQLite (no extra system deps)
+#   * .mdb / .accdb    -> the FAO Microsoft Access file read DIRECTLY via the
+#                         DBI-compatible 'odbc' package (preferred) or 'RODBC',
+#                         both using the Microsoft Access ODBC driver. This lets
+#                         you point straight at the FAO download with no manual
+#                         .mdb -> .sqlite conversion.
+.hwsd_read_layer_table <- function(hwsd_db_file) {
+  candidates <- c("HWSD2_LAYERS", "HWSD2_LAYER", "LAYERS", "D_LAYERS")
+  ext <- tolower(tools::file_ext(hwsd_db_file))
+
+  if (ext %in% c("mdb", "accdb")) {
+    conn_str <- sprintf("Driver={Microsoft Access Driver (*.mdb, *.accdb)};Dbq=%s;",
+                        normalizePath(hwsd_db_file, mustWork = TRUE))
+    if (requireNamespace("odbc", quietly = TRUE) && requireNamespace("DBI", quietly = TRUE)) {
+      con <- DBI::dbConnect(odbc::odbc(), .connection_string = conn_str)
+      on.exit(DBI::dbDisconnect(con), add = TRUE)
+      tbls <- DBI::dbListTables(con)
+      layer_tbl <- .hwsd_pick(tbls, candidates)
+      if (is.na(layer_tbl))
+        stop(sprintf("No HWSD2 layer table in %s. Tables: %s",
+                     basename(hwsd_db_file), paste(tbls, collapse = ", ")))
+      return(DBI::dbReadTable(con, layer_tbl))
+    }
+    if (requireNamespace("RODBC", quietly = TRUE)) {
+      ch <- RODBC::odbcDriverConnect(conn_str)
+      on.exit(try(RODBC::odbcClose(ch), silent = TRUE), add = TRUE)
+      tbls <- RODBC::sqlTables(ch, tableType = "TABLE")$TABLE_NAME
+      layer_tbl <- .hwsd_pick(tbls, candidates)
+      if (is.na(layer_tbl))
+        stop(sprintf("No HWSD2 layer table in %s. Tables: %s",
+                     basename(hwsd_db_file), paste(tbls, collapse = ", ")))
+      return(RODBC::sqlFetch(ch, layer_tbl, stringsAsFactors = FALSE))
+    }
+    stop("Reading an Access (.mdb/.accdb) HWSD database needs the 'odbc' (preferred) ",
+         "or 'RODBC' package plus the Microsoft Access ODBC driver. ",
+         "install.packages('odbc'), or convert the .mdb to .sqlite.")
+  }
+
+  # Default: SQLite.
+  for (pkg in c("DBI", "RSQLite")) {
+    if (!requireNamespace(pkg, quietly = TRUE))
+      stop(sprintf("HWSD (SQLite) needs the '%s' package. install.packages('%s')", pkg, pkg))
+  }
+  con <- DBI::dbConnect(RSQLite::SQLite(), hwsd_db_file)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  tbls <- DBI::dbListTables(con)
+  layer_tbl <- .hwsd_pick(tbls, candidates)
+  if (is.na(layer_tbl))
+    stop(sprintf("No HWSD2 layer table found. Tables: %s", paste(tbls, collapse = ", ")))
+  DBI::dbReadTable(con, layer_tbl)
+}
+
 process_soils_hwsd <- function(grid_points, hwsd_raster_file, hwsd_db_file,
                                output_csv_path, output_sol_dir,
                                id_col = "ID", lat_col = "LAT", long_col = "LONG") {
   message("--- Starting HWSD2 Extraction ---")
-  # Load the SQLite packages only now (HWSD-only deps; see note at top of file).
-  for (pkg in c("DBI", "RSQLite")) {
-    if (!requireNamespace(pkg, quietly = TRUE))
-      stop(sprintf("HWSD needs the '%s' package. install.packages('%s')", pkg, pkg))
-  }
   for (f in c(hwsd_raster_file, hwsd_db_file)) {
     if (!file.exists(f)) stop(sprintf("HWSD2 file not found: %s", f))
   }
@@ -66,14 +117,8 @@ process_soils_hwsd <- function(grid_points, hwsd_raster_file, hwsd_db_file,
   smu <- terra::extract(r, pts, ID = FALSE)[, 1]
   smu[is.nan(smu)] <- NA
 
-  # 2. Load the HWSD2 layer table and resolve columns.
-  con <- DBI::dbConnect(RSQLite::SQLite(), hwsd_db_file)
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  tbls <- DBI::dbListTables(con)
-  layer_tbl <- .hwsd_pick(tbls, c("HWSD2_LAYERS", "HWSD2_LAYER", "LAYERS", "D_LAYERS"))
-  if (is.na(layer_tbl)) stop(sprintf("No HWSD2 layer table found. Tables: %s",
-                                     paste(tbls, collapse = ", ")))
-  layers <- DBI::dbReadTable(con, layer_tbl)
+  # 2. Load the HWSD2 layer table (SQLite or Access .mdb) and resolve columns.
+  layers <- .hwsd_read_layer_table(hwsd_db_file)
   cn <- names(layers)
   col <- list(
     smu = .hwsd_pick(cn, c("HWSD2_SMU_ID","SMU_ID","HWSD2_SMU","SMU")),

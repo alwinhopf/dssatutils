@@ -5,7 +5,9 @@ Version: 0.1.0
 Authors@R: person("Alwin", "Hopf", email = "alwinhopf@gmail.com", role = c("aut", "cre"))
 Description: Reusable functions that download weather and soil data from a range of
     public sources (Daymet, GridMET, NASA POWER, Open-Meteo, AgERA5, NASA
-    POWER + CHIRPS; SSURGO, SoilGrids, SoilGrids 2.0 online, FAO HWSD2) and write
+    POWER + CHIRPS, DWD station data, E-OBS European grids, BR-DWGD/Xavier Brazil
+    grids, CMFD China grids; SSURGO, gNATSGO, iSDAsoil Africa, LUCAS Europe
+    topsoil, SoilGrids, SoilGrids 2.0 online, FAO HWSD2) and write
     them as DSSAT .WTH and .SOL files for spatial / gridded crop-model runs.
     Shared by the DSSAT Gridded Run Tutorial and DSSAT ML Phenology Prediction
     projects so the download logic lives in one versioned place.
@@ -32,5 +34,7 @@ Imports:
 Suggests:
     ecmwfr,
     DBI,
-    RSQLite
+    RSQLite,
+    odbc,
+    RODBC
 RoxygenNote: 7.3.1
