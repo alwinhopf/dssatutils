@@ -16,12 +16,14 @@ Each function fetches data from a public source and writes DSSAT-format
 
 | Domain | Sources (function name is the same in R and Python) |
 |---|---|
-| Weather | `process_weather_daymet`, `process_weather_gridmet`, `process_weather_nasapower`, `process_weather_openmeteo`, `process_weather_agera5`, `process_weather_nasapower_chirps` |
-| Soil | `process_soils_ssurgo`, `process_soils_ssurgo_alderman`, `process_soils_soilgrids`, `process_soils_soilgrids_online`, `process_soils_hwsd` |
+| Weather | `process_weather_daymet`, `process_weather_gridmet`, `process_weather_nasapower`, `process_weather_openmeteo`, `process_weather_agera5`, `process_weather_nasapower_chirps`, `process_weather_cmfd`, `process_weather_dwd`, `process_weather_eobs`, `process_weather_xavier`, `process_weather_era5_land` |
+| Soil | `process_soils_ssurgo`, `process_soils_ssurgo_alderman`, `process_soils_soilgrids`, `process_soils_soilgrids_online`, `process_soils_hwsd`, `process_soils_gnatsgo`, `process_soils_isdasoil`, `process_soils_lucas` |
 
-Coverage notes: Daymet = North America; GridMET/SSURGO = USA; NASA POWER /
-Open-Meteo / AgERA5 / SoilGrids / HWSD2 = global. AgERA5 needs a free
-Copernicus CDS API key; CHIRPS fuses NASA POWER with high-res rainfall (50S–50N).
+Coverage notes: Daymet = North America; GridMET/SSURGO/gNATSGO = USA; NASA POWER /
+Open-Meteo / AgERA5 / ERA5-Land / SoilGrids / HWSD2 = global; iSDAsoil = Africa;
+LUCAS = Europe topsoil; CMFD = China; DWD = Germany; E-OBS = Europe; Xavier = Brazil.
+AgERA5, ERA5-Land, and E-OBS require a free Copernicus CDS API key; CHIRPS fuses
+NASA POWER with high-res rainfall (50S–50N).
 
 ## Install
 

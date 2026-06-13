@@ -331,6 +331,44 @@ class TestComprehensive(unittest.TestCase):
 
         self._assert_wth_valid(os.path.join(out_dir, "TEST_1.WTH"))
 
+    @patch("dssatutils.weather_era5land._download_era5_land_point_csv")
+    def test_weather_era5land(self, mock_download):
+        """ERA5-Land: mock download to write a synthetic CSV and run parsing/aggregation."""
+        from dssatutils import process_weather_era5_land
+
+        def mock_download_side_effect(latitude, longitude, start_date_str, end_date_str, target_file, cds_user):
+            # Create a synthetic hourly dataset for 2 days
+            dates = pd.date_range("2010-01-01 00:00:00", "2010-01-02 23:00:00", freq="h")
+            n = len(dates)
+            df = pd.DataFrame({
+                "time": dates,
+                "2m_temperature": np.random.uniform(280, 295, n),  # K
+                "2m_dewpoint_temperature": np.random.uniform(275, 285, n),  # K
+                "total_precipitation": np.random.uniform(0, 0.005, n),  # m
+                "surface_solar_radiation_downwards": np.random.uniform(1e5, 1e6, n),  # J/m2
+                "10m_u_component_of_wind": np.random.uniform(-5, 5, n),
+                "10m_v_component_of_wind": np.random.uniform(-5, 5, n)
+            })
+            os.makedirs(os.path.dirname(target_file), exist_ok=True)
+            df.to_csv(target_file, index=False)
+
+        mock_download.side_effect = mock_download_side_effect
+
+        out_dir = os.path.join(self.work, "era5land")
+        process_weather_era5_land(
+            shapefile=self.shapefile,
+            start_year=2010,
+            end_year=2010,
+            output_dir=out_dir,
+            id_col="ID",
+            lat_col="LAT",
+            lon_col="LONG",
+            n_cores=1,
+            log_file=os.path.join(self.work, "error.log")
+        )
+
+        self._assert_wth_valid(os.path.join(out_dir, "TEST_1.WTH"))
+
     # ===================================================================
     # SOIL SOURCES
     # ===================================================================

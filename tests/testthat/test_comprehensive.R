@@ -431,14 +431,14 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
   shapefile$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
   
   local_mocked_bindings(
-    SDA_spatialQuery = function(point_sf, what) {
-      data.frame(mukey = "12345")
+    robust_SDA_spatialQuery = function(point_sf, what, ...) {
+      list(ok = TRUE, data = data.frame(mukey = "12345"), error = NA_character_)
     },
-    SDA_query = function(query) {
+    robust_SDA_query = function(query, ...) {
       if (grepl("brockdepmin", query)) {
-        data.frame(mukey = "12345", brockdepmin = 200.0)
+        list(ok = TRUE, data = data.frame(mukey = "12345", brockdepmin = 200.0), error = NA_character_)
       } else {
-        data.frame(
+        list(ok = TRUE, data = data.frame(
           mukey = "12345",
           cokey = "cokey1",
           comppct_r = 100,
@@ -448,10 +448,10 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
           sandtotal_r = 40.0,
           om_r = 1.5,
           dbthirdbar_r = 1.4
-        )
+        ), error = NA_character_)
       }
     },
-    .package = "soilDB"
+    .package = "dssatutils"
   )
   
   local_mocked_bindings(
@@ -500,10 +500,10 @@ test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
   shapefile$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
   
   local_mocked_bindings(
-    SDA_spatialQuery = function(point_sf, what) {
+    robust_SDA_spatialQuery = function(point_sf, what, ...) {
       data.frame(mukey = "12345")
     },
-    SDA_query = function(query) {
+    robust_SDA_query = function(query, ...) {
       if (grepl("muaggatt", query)) {
         data.frame(mukey = "12345", brockdepmin = 200.0)
       } else if (grepl("component", query)) {
@@ -541,7 +541,7 @@ test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
         )
       }
     },
-    .package = "soilDB"
+    .package = "dssatutils"
   )
   
   local_mocked_bindings(
@@ -629,4 +629,47 @@ test_that("process_soils_hwsd runs successfully with mocks", {
   
   expect_true(file.exists(output_csv))
   assert_sol_valid(file.path(output_sol_dir, "TEST1.SOL"))
+})
+
+test_that("process_weather_era5_land runs successfully with mocks", {
+  skip_if_not_installed("ecmwfr")
+
+  work_dir <- tempfile()
+  dir.create(work_dir)
+  on.exit(unlink(work_dir, recursive = TRUE))
+
+  shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
+  log_file <- file.path(work_dir, "error.log")
+
+  # Mock downloading by writing a synthetic CSV to the raw_csv destination
+  local_mocked_bindings(
+    .download_era5_land_point_csv = function(latitude, longitude, start_date, end_date, target_file, ...) {
+      df <- data.frame(
+        time = seq(as.POSIXct("2010-01-01 00:00:00", tz = "UTC"), as.POSIXct("2010-01-02 23:00:00", tz = "UTC"), by = "hour"),
+        `2m_temperature` = runif(48, 280, 295),
+        `2m_dewpoint_temperature` = runif(48, 275, 285),
+        `total_precipitation` = runif(48, 0, 0.005),
+        `surface_solar_radiation_downwards` = runif(48, 1e5, 1e6),
+        `10m_u_component_of_wind` = runif(48, -5, 5),
+        `10m_v_component_of_wind` = runif(48, -5, 5),
+        check.names = FALSE
+      )
+      readr::write_csv(df, target_file)
+    },
+    .package = "dssatutils"
+  )
+
+  process_weather_era5_land(
+    shapefile = shapefile,
+    start_year = 2010,
+    end_year = 2010,
+    output_dir = work_dir,
+    id_col = "ID",
+    lat_col = "LAT",
+    lon_col = "LONG",
+    n_cores = 1,
+    log_file = log_file
+  )
+
+  assert_wth_valid(file.path(work_dir, "TEST1.WTH"))
 })

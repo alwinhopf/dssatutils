@@ -41,6 +41,7 @@ def test_module_imports():
         "dssatutils.soil_soilgrids_online",
         "dssatutils.soil_ssurgo",
         "dssatutils.soil_ssurgo_alderman",
+        "dssatutils.weather_era5land",
     ]
     for mod in modules:
         try:
@@ -126,6 +127,7 @@ def _run_standalone():
         "dssatutils.soil_soilgrids_online",
         "dssatutils.soil_ssurgo",
         "dssatutils.soil_ssurgo_alderman",
+        "dssatutils.weather_era5land",
     ]
     for mod in modules:
         try:

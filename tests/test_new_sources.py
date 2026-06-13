@@ -30,7 +30,8 @@ def test_new_modules_import_and_export():
     import dssatutils
     for name in ("process_soils_gnatsgo", "process_weather_dwd", "process_weather_eobs",
                  "process_soils_isdasoil", "process_soils_lucas",
-                 "process_weather_xavier", "process_weather_cmfd"):
+                 "process_weather_xavier", "process_weather_cmfd",
+                 "process_weather_era5_land"):
         assert hasattr(dssatutils, name), f"dssatutils missing public {name}"
 
 
