@@ -17,7 +17,7 @@ Each function fetches data from a public source and writes DSSAT-format
 | Domain | Sources (function name is the same in R and Python) |
 |---|---|
 | Weather | `process_weather_daymet`, `process_weather_gridmet`, `process_weather_nasapower`, `process_weather_openmeteo`, `process_weather_agera5`, `process_weather_nasapower_chirps` |
-| Soil | `process_soils_ssurgo`, `process_soils_soilgrids`, `process_soils_soilgrids_online`, `process_soils_hwsd` |
+| Soil | `process_soils_ssurgo`, `process_soils_ssurgo_alderman`, `process_soils_soilgrids`, `process_soils_soilgrids_online`, `process_soils_hwsd` |
 
 Coverage notes: Daymet = North America; GridMET/SSURGO = USA; NASA POWER /
 Open-Meteo / AgERA5 / SoilGrids / HWSD2 = global. AgERA5 needs a free

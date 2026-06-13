@@ -11,6 +11,7 @@ export(process_weather_nasapower_chirps)
 export(process_soils_soilgrids)
 export(process_soils_soilgrids_online)
 export(process_soils_ssurgo)
+export(process_soils_ssurgo_alderman)
 export(process_soils_hwsd)
 
 importFrom(foreach, foreach, "%dopar%")

@@ -24,6 +24,7 @@ _EXPORTS = {
     "process_soils_soilgrids": "soil_soilgrids",
     "process_soils_soilgrids_online": "soil_soilgrids_online",
     "process_soils_ssurgo": "soil_ssurgo",
+    "process_soils_ssurgo_alderman": "soil_ssurgo_alderman",
     "process_soils_hwsd": "soil_hwsd",
 }
 

@@ -493,6 +493,64 @@ class TestComprehensive(unittest.TestCase):
 
         self.assertTrue(os.path.exists(out_csv))
 
+    @patch("dssatutils.soil_ssurgo_alderman.requests.post")
+    @patch("dssatutils.soil_ssurgo_alderman._sda_spatial_mukeys")
+    def test_soil_ssurgo_alderman(self, mock_mukeys, mock_post):
+        """USDA SSURGO SDA (Alderman): mock spatial query and attribute queries."""
+        from dssatutils import process_soils_ssurgo_alderman
+
+        mock_mukeys.return_value = ["12345"]
+
+        def mock_sda_post_handler(url, data=None, json=None, timeout=None, **kwargs):
+            sql = ""
+            if data:
+                sql = data.get("query", "") if isinstance(data, dict) else str(data)
+            if json:
+                sql = json.get("query", "")
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            if "brockdepmin" in sql.lower():
+                mock_resp.json.return_value = {
+                    "Table": [
+                        ["mukey", "brockdepmin"],
+                        ["12345", "200.0"],
+                    ]
+                }
+            elif "component" in sql.lower():
+                mock_resp.json.return_value = {
+                    "Table": [
+                        ["compname", "cokey", "mukey", "comppct_r", "hydgrp", "slope_r", "drainage", "albedodry_r"],
+                        ["Miami", "cokey1", "12345", "100", "B", "2.0", "Well drained", "0.13"]
+                    ]
+                }
+            else:
+                mock_resp.json.return_value = {
+                    "Table": [
+                        ["hzdept_r", "hzdepb_r", "dbovendry_r", "dbtenthbar_r", "dbthirdbar_r", "dbfifteenbar_r",
+                         "wsatiated_r", "wtenthbar_r", "wthirdbar_r", "partdensity", "ksat_r", "wfifteenbar_r",
+                         "sandtotal_r", "claytotal_r", "silttotal_r", "om_r", "hzname", "fragvol_r", "cokey"],
+                        ["0", "15", "1.45", "1.4", "1.4", "1.5", "45", "25", "20", "2.65", "15", "10", "40", "20", "40", "1.5", "Ap", None, "cokey1"]
+                    ]
+                }
+            return mock_resp
+
+        mock_post.side_effect = mock_sda_post_handler
+
+        out_csv = os.path.join(self.work, "soil_map_alderman.csv")
+        out_sol_dir = os.path.join(self.work, "individual_sol_alderman")
+
+        process_soils_ssurgo_alderman(
+            grid_points=self.shapefile,
+            output_dir_csv=out_csv,
+            output_dir_individual=out_sol_dir,
+            n_cores=1,
+            id_col="ID",
+            lat_col="LAT",
+            long_col="LONG",
+        )
+
+        self.assertTrue(os.path.exists(out_csv))
+
     @patch("dssatutils.soil_hwsd._sample_smu_ids")
     def test_soil_hwsd(self, mock_sample):
         """FAO HWSD v2: mock raster sampling, create real SQLite DB."""

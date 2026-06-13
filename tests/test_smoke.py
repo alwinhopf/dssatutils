@@ -40,6 +40,7 @@ def test_module_imports():
         "dssatutils.soil_soilgrids",
         "dssatutils.soil_soilgrids_online",
         "dssatutils.soil_ssurgo",
+        "dssatutils.soil_ssurgo_alderman",
     ]
     for mod in modules:
         try:
@@ -124,6 +125,7 @@ def _run_standalone():
         "dssatutils.soil_soilgrids",
         "dssatutils.soil_soilgrids_online",
         "dssatutils.soil_ssurgo",
+        "dssatutils.soil_ssurgo_alderman",
     ]
     for mod in modules:
         try:

@@ -21,7 +21,7 @@ else
 fi
 
 say "== TIER 1b: dssatutils package object imports (lazy, cheap) =="
-python3 -c "import sys; sys.path.insert(0,'$PKG/python'); import dssatutils; assert len(dssatutils.__all__)==10; print('  OK: import dssatutils, __all__ has', len(dssatutils.__all__), 'fns')" 2>>"$OUT" \
+python3 -c "import sys; sys.path.insert(0,'$PKG/python'); import dssatutils; assert len(dssatutils.__all__)==11; print('  OK: import dssatutils, __all__ has', len(dssatutils.__all__), 'fns')" 2>>"$OUT" \
   || say "  FAIL: could not import dssatutils package object"
 
 say "== TIER 1c: R parse every file (syntax only, no library() exec) =="
@@ -33,7 +33,7 @@ say "   Skipped by default. To run: SET DEEP=1 ./migrate/01_local_install_check.
 if [ "${DEEP:-0}" = "1" ]; then
   for m in weather_daymet weather_gridmet weather_nasapower weather_agera5 \
            weather_openmeteo weather_nasapower_chirps soil_soilgrids \
-           soil_soilgrids_online soil_ssurgo soil_hwsd; do
+           soil_soilgrids_online soil_ssurgo soil_ssurgo_alderman soil_hwsd; do
     python3 -c "import sys; sys.path.insert(0,'$PKG/python'); import importlib; importlib.import_module('dssatutils.$m'); print('  ok: $m')" 2>>"$OUT" \
       || say "  (import failed: $m — likely a missing optional dep in this env)"
   done

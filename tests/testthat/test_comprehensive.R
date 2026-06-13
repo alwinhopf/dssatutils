@@ -489,6 +489,97 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
   assert_sol_valid(file.path(output_sol_dir, "TEST1.SOL"))
 })
 
+test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
+  work_dir <- tempfile()
+  dir.create(work_dir)
+  on.exit(unlink(work_dir, recursive = TRUE))
+  
+  shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
+  class(shapefile) <- c("sf", "data.frame")
+  attr(shapefile, "sf_column") <- "geometry"
+  shapefile$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
+  
+  local_mocked_bindings(
+    SDA_spatialQuery = function(point_sf, what) {
+      data.frame(mukey = "12345")
+    },
+    SDA_query = function(query) {
+      if (grepl("muaggatt", query)) {
+        data.frame(mukey = "12345", brockdepmin = 200.0)
+      } else if (grepl("component", query)) {
+        data.frame(
+          compname = "Miami",
+          cokey = "cokey1",
+          mukey = "12345",
+          comppct_r = 100,
+          hydgrp = "B",
+          slope_r = 2.0,
+          drainage = "Well drained",
+          albedodry_r = 0.13
+        )
+      } else {
+        data.frame(
+          hzdept_r = 0,
+          hzdepb_r = 15,
+          dbovendry_r = 1.45,
+          dbtenthbar_r = 1.4,
+          dbthirdbar_r = 1.4,
+          dbfifteenbar_r = 1.5,
+          wsatiated_r = 45.0,
+          wtenthbar_r = 25.0,
+          wthirdbar_r = 20.0,
+          partdensity = 2.65,
+          ksat_r = 15.0,
+          wfifteenbar_r = 10.0,
+          sandtotal_r = 40.0,
+          claytotal_r = 20.0,
+          silttotal_r = 40.0,
+          om_r = 1.5,
+          hzname = "Ap",
+          fragvol_r = NA_real_,
+          cokey = "cokey1"
+        )
+      }
+    },
+    .package = "soilDB"
+  )
+  
+  local_mocked_bindings(
+    st_as_sf = function(...) {
+      sf_obj <- data.frame(ID = "TEST1")
+      class(sf_obj) <- c("sf", "data.frame")
+      attr(sf_obj, "sf_column") <- "geometry"
+      sf_obj$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
+      sf_obj
+    },
+    st_drop_geometry = function(x) {
+      x$geometry <- NULL
+      as.data.frame(x)
+    },
+    st_coordinates = function(...) matrix(c(-90.0, 40.0), nrow = 1),
+    st_as_text = function(...) "POINT(-90 40)",
+    .package = "sf"
+  )
+  
+  output_csv <- file.path(work_dir, "soil_map.csv")
+  output_sol_dir <- file.path(work_dir, "individual_sol")
+  dir.create(output_sol_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  process_soils_ssurgo_alderman(
+    grid_points = shapefile,
+    output_dir_csv = output_csv,
+    output_dir_individual = output_sol_dir,
+    n_cores = 1,
+    id_col = "ID",
+    lat_col = "LAT",
+    long_col = "LONG",
+    format_sql_func = function(x) paste0("('", x, "')")
+  )
+  
+  expect_true(file.exists(output_csv))
+  assert_sol_valid(file.path(output_sol_dir, "TEST1.SOL"))
+})
+
 test_that("process_soils_hwsd runs successfully with mocks", {
   # HWSD uses DBI + RSQLite, both in Suggests, so they may be absent on CI.
   skip_if_not_installed("DBI")
