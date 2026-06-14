@@ -11,7 +11,7 @@ missing, submodules are imported lazily via ``__getattr__`` (PEP 562).
 """
 from importlib import import_module
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 
 # public name -> submodule that defines it
 _EXPORTS = {

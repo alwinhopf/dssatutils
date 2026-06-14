@@ -59,6 +59,10 @@ def _calculate_soil_physics(sand_pct: float, clay_pct: float,
                  + 0.006 * S * OM - 0.027 * C * OM
                  + 0.452 * S * C + 0.299)
     SDUL = theta_33t + (1.283 * theta_33t**2 - 0.374 * theta_33t - 0.015)
+    # Keep a usable plant-available-water gap (see soil_ssurgo.py): on near-pure-
+    # sand layers SDUL lands barely above the floored SLLL, and a DUL-LL gap
+    # < ~0.04 SIGFPEs DSSAT's water balance mid-season. Enforce DUL-LL >= 0.04.
+    SDUL = max(SDUL, SLLL + 0.04)
 
     theta_s33t = (0.278 * S + 0.034 * C + 0.022 * OM
                   - 0.018 * S * OM - 0.027 * C * OM

@@ -98,7 +98,8 @@ format_dssat_soil_isdasoil <- function(profile_data, output_dir) {
   # SLLL <= 0 on very sandy soils, which SIGFPEs DSSAT's water balance.
   SLLL  <- pmax(t1500 + (0.14*t1500 - 0.02), 0.02)
   t33   <- -0.251*S + 0.195*C + 0.011*OM + 0.006*(S*OM) - 0.027*(C*OM) + 0.452*(S*C) + 0.299
-  SDUL  <- t33 + (1.283*t33^2 - 0.374*t33 - 0.015)
+  # Keep DUL-LL >= 0.04 (see soil_ssurgo.R): a near-zero gap SIGFPEs DSSAT.
+  SDUL  <- pmax(t33 + (1.283*t33^2 - 0.374*t33 - 0.015), SLLL + 0.04)
   ts33t <- 0.278*S + 0.034*C + 0.022*OM - 0.018*(S*OM) - 0.027*(C*OM) - 0.584*(S*C) + 0.078
   ts33  <- ts33t + (0.636*ts33t - 0.107)
   SSAT  <- SDUL + ts33 - 0.097*S + 0.043

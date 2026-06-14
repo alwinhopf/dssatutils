@@ -426,8 +426,9 @@ def _build_dssat_profile_from_component(component_row, horizon_tbl: pd.DataFrame
             
         # Floor wilting point at 0.02 (consistent with soil_ssurgo / soil_gnatsgo):
         # measured wfifteenbar_r or the Saxton-Rawls fallback can yield SLLL ~0 on
-        # sandy soils, which SIGFPEs DSSAT. The sdul = max(sdul, slll + 0.005) step
-        # in the fill loop keeps DUL strictly above the floored LL.
+        # sandy soils, which SIGFPEs DSSAT. The sdul = max(sdul, slll + 0.04) step
+        # in the fill loop keeps a usable plant-available-water gap above the
+        # floored LL (a gap < ~0.04 still SIGFPEs DSSAT's water balance mid-season).
         SLLL = max(_clip01(_coalesce_num(SLLL_raw, SLLL_ptf)), 0.02)
         SDUL = _clip01(_coalesce_num(SDUL_raw, SDUL_ptf))
         SSAT = _clip01(_coalesce_num(SSAT_raw, SSAT_ptf))
@@ -468,7 +469,7 @@ def _build_dssat_profile_from_component(component_row, horizon_tbl: pd.DataFrame
         
         if slll is not None and not math.isnan(slll):
             if sdul is not None and not math.isnan(sdul):
-                sdul = max(sdul, slll + 0.005)
+                sdul = max(sdul, slll + 0.04)
             if ssat is not None and not math.isnan(ssat):
                 ssat = max(ssat, (sdul or slll) + 0.01)
                 
@@ -692,7 +693,7 @@ def _build_simple_fallback_profile(lat: float, lon: float, point_id: str, mukeys
         
         if slll is not None and not math.isnan(slll):
             if sdul is not None and not math.isnan(sdul):
-                sdul = max(sdul, slll + 0.005)
+                sdul = max(sdul, slll + 0.04)
             if ssat is not None and not math.isnan(ssat):
                 ssat = max(ssat, (sdul or slll) + 0.01)
                 

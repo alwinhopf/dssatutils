@@ -441,12 +441,14 @@ build_dssat_profile_from_component <- function(component_row, horizon_tbl, point
       ),
       # Floor wilting point at 0.02 (consistent with soil_ssurgo.R / soil_gnatsgo.R):
       # measured wfifteenbar_r or the Saxton-Rawls fallback can yield SLLL ~0 on
-      # sandy soils, which SIGFPEs DSSAT. The SDUL = pmax(SDUL, SLLL + 0.005) line
-      # below keeps DUL strictly above the floored LL.
+      # sandy soils, which SIGFPEs DSSAT. The SDUL = pmax(SDUL, SLLL + 0.04) line
+      # below keeps a usable plant-available-water gap above the floored LL: a
+      # gap of only ~0.005-0.014 still drives DSSAT's water balance to a
+      # divide-by-(DUL-LL) singularity (SIGFPE mid-season), so enforce >= 0.04.
       SLLL = pmax(clip01(coalesce_num(SLLL_raw, ifelse(bedrock, NA_real_, SLLL_ptf))), 0.02),
       SDUL = clip01(coalesce_num(SDUL_raw, ifelse(bedrock, NA_real_, SDUL_ptf))),
       SSAT = clip01(coalesce_num(SSAT_raw, ifelse(bedrock, NA_real_, SSAT_ptf))),
-      SDUL = pmax(SDUL, SLLL + 0.005),
+      SDUL = pmax(SDUL, SLLL + 0.04),
       SSAT = pmax(SSAT, SDUL + 0.01),
       SLCF = ifelse(bedrock & is.na(fragvol_raw), 99, coalesce_num(fragvol_raw, 0)),
       SRGF = ifelse(bedrock, pmax(0.01, 1 - SLCF / 100), 1.0),

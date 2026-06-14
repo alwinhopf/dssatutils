@@ -57,7 +57,10 @@ calculate_soil_physics <- function(sand_pct, clay_pct, om_pct) {
   # Floor wilting point at 0.02 (see soil_ssurgo.R): Saxton-Rawls can yield
   # SLLL <= 0 on very sandy soils, which SIGFPEs DSSAT's water balance.
   SLLL <- pmax(theta_1500t + (0.14 * theta_1500t - 0.02), 0.02)
-  SDUL <- theta_33t + (1.283 * theta_33t^2 - 0.374 * theta_33t - 0.015)
+  # Keep a usable plant-available-water gap (see soil_ssurgo.R): on near-pure-sand
+  # layers SDUL lands barely above the floored SLLL, and a DUL-LL gap < ~0.04
+  # SIGFPEs DSSAT's water balance mid-season. Enforce DUL-LL >= 0.04.
+  SDUL <- pmax(theta_33t + (1.283 * theta_33t^2 - 0.374 * theta_33t - 0.015), SLLL + 0.04)
   #SSAT <- SDUL + theta_s33t - 0.097 * S + 0.043
   #replaced with (Saxton & Rawls 2006) adjustment
   theta_s33 <- theta_s33t + (0.636 * theta_s33t - 0.107)

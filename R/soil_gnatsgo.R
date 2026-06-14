@@ -216,7 +216,12 @@ process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_indivi
       # is kept so the caller can tally and log the adjustment.
       SLLL = pmax(SLLL_raw, 0.02),
       theta_33t = -0.251*sand_dec + 0.195*clay_dec + 0.011*om_dec + 0.006*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) + 0.452*(sand_dec*clay_dec) + 0.299,
-      SDUL = theta_33t + (1.283*(theta_33t)^2 - 0.374*theta_33t - 0.015),
+      SDUL_raw = theta_33t + (1.283*(theta_33t)^2 - 0.374*theta_33t - 0.015),
+      # Floor field capacity so plant-available water (DUL-LL) stays usable (see
+      # soil_ssurgo.R): near-pure-sand layers get SDUL barely above the floored
+      # SLLL, which SIGFPEs DSSAT's water balance. Guarantee DUL-LL >= 0.04;
+      # SDUL_raw is kept so the caller can tally and log the adjustment.
+      SDUL = pmax(SDUL_raw, SLLL + 0.04),
       theta_s33t = 0.278*sand_dec + 0.034*clay_dec + 0.022*om_dec - 0.018*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) - 0.584*(sand_dec*clay_dec) + 0.078,
       theta_s33 = theta_s33t + (0.636*theta_s33t - 0.107),
       SSAT = SDUL + theta_s33 - 0.097*sand_dec + 0.043
@@ -268,6 +273,16 @@ process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_indivi
                           nrow(clamped), length(ids), paste(ids, collapse = ", ")))
         }
         chunk_df$SLLL_raw <- NULL
+      }
+      # Surface field-capacity raises (minimum available-water enforcement) too.
+      if ("SDUL_raw" %in% names(chunk_df)) {
+        raised <- chunk_df[!is.na(chunk_df$SDUL_raw) & (chunk_df$SDUL - chunk_df$SDUL_raw) > 1e-9, ]
+        if (nrow(raised) > 0) {
+          ids <- unique(as.character(raised$ID))
+          message(sprintf("[gNATSGO] SDUL raised to keep DUL-LL >= 0.040 on %d layer(s) across %d point(s) (near-zero plant-available water; sandy soils): %s",
+                          nrow(raised), length(ids), paste(ids, collapse = ", ")))
+        }
+        chunk_df$SDUL_raw <- NULL
       }
       readr::write_csv(chunk_df, output_dir_csv, append = file.exists(output_dir_csv))
     }
