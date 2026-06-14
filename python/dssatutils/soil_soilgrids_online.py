@@ -51,6 +51,9 @@ def _calculate_soil_physics(sand_pct: float, clay_pct: float,
                    + 0.005 * S * OM - 0.013 * C * OM
                    + 0.068 * S * C + 0.031)
     SLLL = theta_1500t + (0.14 * theta_1500t - 0.02)
+    # Floor wilting point at 0.02 (see soil_ssurgo.py): Saxton-Rawls can yield
+    # SLLL <= 0 on very sandy soils, which SIGFPEs DSSAT's water balance.
+    SLLL = max(SLLL, 0.02)
 
     theta_33t = (-0.251 * S + 0.195 * C + 0.011 * OM
                  + 0.006 * S * OM - 0.027 * C * OM

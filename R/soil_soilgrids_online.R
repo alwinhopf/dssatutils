@@ -54,7 +54,9 @@ calculate_soil_physics <- function(sand_pct, clay_pct, om_pct) {
     0.584 * (S * C) + 0.078
   
   # Adjustments (Rawls canon)
-  SLLL <- theta_1500t + (0.14 * theta_1500t - 0.02)
+  # Floor wilting point at 0.02 (see soil_ssurgo.R): Saxton-Rawls can yield
+  # SLLL <= 0 on very sandy soils, which SIGFPEs DSSAT's water balance.
+  SLLL <- pmax(theta_1500t + (0.14 * theta_1500t - 0.02), 0.02)
   SDUL <- theta_33t + (1.283 * theta_33t^2 - 0.374 * theta_33t - 0.015)
   #SSAT <- SDUL + theta_s33t - 0.097 * S + 0.043
   #replaced with (Saxton & Rawls 2006) adjustment

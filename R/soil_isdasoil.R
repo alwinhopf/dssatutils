@@ -94,7 +94,9 @@ format_dssat_soil_isdasoil <- function(profile_data, output_dir) {
 .isda_saxton_rawls <- function(sand_pct, clay_pct, om_pct) {
   S <- sand_pct / 100; C <- clay_pct / 100; OM <- om_pct / 100
   t1500 <- -0.024*S + 0.487*C + 0.006*OM + 0.005*(S*OM) - 0.013*(C*OM) + 0.068*(S*C) + 0.031
-  SLLL  <- t1500 + (0.14*t1500 - 0.02)
+  # Floor wilting point at 0.02 (see soil_ssurgo.R): Saxton-Rawls can yield
+  # SLLL <= 0 on very sandy soils, which SIGFPEs DSSAT's water balance.
+  SLLL  <- pmax(t1500 + (0.14*t1500 - 0.02), 0.02)
   t33   <- -0.251*S + 0.195*C + 0.011*OM + 0.006*(S*OM) - 0.027*(C*OM) + 0.452*(S*C) + 0.299
   SDUL  <- t33 + (1.283*t33^2 - 0.374*t33 - 0.015)
   ts33t <- 0.278*S + 0.034*C + 0.022*OM - 0.018*(S*OM) - 0.027*(C*OM) - 0.584*(S*C) + 0.078

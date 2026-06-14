@@ -424,7 +424,11 @@ def _build_dssat_profile_from_component(component_row, horizon_tbl: pd.DataFrame
             SDUL_ptf = _ptf_saxton_sdul(silt, clay, soc, bd_for_ptf, coarse_fraction)
             SSAT_ptf = _ptf_saxton_ssat(silt, clay, soc, bd_for_ptf, coarse_fraction)
             
-        SLLL = _clip01(_coalesce_num(SLLL_raw, SLLL_ptf))
+        # Floor wilting point at 0.02 (consistent with soil_ssurgo / soil_gnatsgo):
+        # measured wfifteenbar_r or the Saxton-Rawls fallback can yield SLLL ~0 on
+        # sandy soils, which SIGFPEs DSSAT. The sdul = max(sdul, slll + 0.005) step
+        # in the fill loop keeps DUL strictly above the floored LL.
+        SLLL = max(_clip01(_coalesce_num(SLLL_raw, SLLL_ptf)), 0.02)
         SDUL = _clip01(_coalesce_num(SDUL_raw, SDUL_ptf))
         SSAT = _clip01(_coalesce_num(SSAT_raw, SSAT_ptf))
         

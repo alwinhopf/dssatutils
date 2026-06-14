@@ -245,7 +245,12 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
       bedrock_depth_cm=bedrock_depth,
       sand_dec=sand_pct/100, clay_dec=clay_pct/100, om_dec=om_pct/100,
       theta_1500t = -0.024*sand_dec + 0.487*clay_dec + 0.006*om_dec + 0.005*(sand_dec*om_dec) - 0.013*(clay_dec*om_dec) + 0.068*(sand_dec*clay_dec) + 0.031,
-      SLLL = theta_1500t + (0.14*theta_1500t - 0.02),
+      SLLL_raw = theta_1500t + (0.14*theta_1500t - 0.02),
+      # Floor the wilting point: Saxton & Rawls can return SLLL <= 0 for very
+      # sandy, low-clay layers, which is unphysical and makes DSSAT's soil-water
+      # balance divide-by-zero (SIGFPE). Clamp to 0.02 cm3/cm3; the raw value is
+      # kept (SLLL_raw) so the caller can tally and log the adjustment.
+      SLLL = pmax(SLLL_raw, 0.02),
       theta_33t = -0.251*sand_dec + 0.195*clay_dec + 0.011*om_dec + 0.006*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) + 0.452*(sand_dec*clay_dec) + 0.299,
       SDUL = theta_33t + (1.283*(theta_33t)^2 - 0.374*theta_33t - 0.015),
       theta_s33t = 0.278*sand_dec + 0.034*clay_dec + 0.022*om_dec - 0.018*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) - 0.584*(sand_dec*clay_dec) + 0.078,
@@ -303,6 +308,18 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
 
     if(length(valid_results) > 0) {
       chunk_df <- dplyr::bind_rows(valid_results)
+
+      # Surface wilting-point clamps (Saxton-Rawls artifact on sandy soils) in the
+      # run log instead of applying them silently, then drop the helper column.
+      if ("SLLL_raw" %in% names(chunk_df)) {
+        clamped <- chunk_df[!is.na(chunk_df$SLLL_raw) & chunk_df$SLLL_raw < 0.02, ]
+        if (nrow(clamped) > 0) {
+          ids <- unique(as.character(clamped$ID))
+          message(sprintf("[SSURGO] SLLL floored to 0.020 on %d layer(s) across %d point(s) (negative/low Saxton-Rawls wilting point; sandy soils): %s",
+                          nrow(clamped), length(ids), paste(ids, collapse = ", ")))
+        }
+        chunk_df$SLLL_raw <- NULL
+      }
 
       # Write to CSV (Append Mode)
       readr::write_csv(chunk_df, output_dir_csv, append = file.exists(output_dir_csv))

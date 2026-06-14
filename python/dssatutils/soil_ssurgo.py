@@ -139,6 +139,10 @@ def _saxton_rawls(sand_pct: float, clay_pct: float, om_pct: float
                    + 0.005 * S * OM - 0.013 * C * OM
                    + 0.068 * S * C + 0.031)
     SLLL = theta_1500t + (0.14 * theta_1500t - 0.02)
+    # Floor the wilting point: Saxton & Rawls can yield SLLL <= 0 for very sandy,
+    # low-clay layers, which is unphysical and makes DSSAT's water balance SIGFPE.
+    # Clamp to 0.02 cm3/cm3 (mirrors the R soil modules). Shared by the gNATSGO twin.
+    SLLL = max(SLLL, 0.02)
 
     # Theta at 33 kPa (field capacity)
     theta_33t = (-0.251 * S + 0.195 * C + 0.011 * OM

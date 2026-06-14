@@ -439,7 +439,11 @@ build_dssat_profile_from_component <- function(component_row, horizon_tbl, point
         coalesce_num(SBDM, dbthirdbar_r, dbovendry_r, 1.4),
         coarse_fraction
       ),
-      SLLL = clip01(coalesce_num(SLLL_raw, ifelse(bedrock, NA_real_, SLLL_ptf))),
+      # Floor wilting point at 0.02 (consistent with soil_ssurgo.R / soil_gnatsgo.R):
+      # measured wfifteenbar_r or the Saxton-Rawls fallback can yield SLLL ~0 on
+      # sandy soils, which SIGFPEs DSSAT. The SDUL = pmax(SDUL, SLLL + 0.005) line
+      # below keeps DUL strictly above the floored LL.
+      SLLL = pmax(clip01(coalesce_num(SLLL_raw, ifelse(bedrock, NA_real_, SLLL_ptf))), 0.02),
       SDUL = clip01(coalesce_num(SDUL_raw, ifelse(bedrock, NA_real_, SDUL_ptf))),
       SSAT = clip01(coalesce_num(SSAT_raw, ifelse(bedrock, NA_real_, SSAT_ptf))),
       SDUL = pmax(SDUL, SLLL + 0.005),
