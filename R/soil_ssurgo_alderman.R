@@ -4,7 +4,14 @@
 # ==============================================================================
 
 # ---- Retry wrappers ----------------------------------------------------------
-robust_SDA_query <- function(query, max_retries = 3, retry_delay_seconds = 5) {
+# NOTE: these are deliberately suffixed "_alderman" and return the RAW SDA result
+# (data.frame, or NULL on failure). They must NOT be named robust_SDA_query /
+# robust_SDA_spatialQuery: soil_ssurgo.R defines those names with a DIFFERENT
+# contract (a list(ok=, data=, error=)), and because the package has no Collate:
+# field, R sources files alphabetically — so an identically named definition here
+# would silently override soil_ssurgo.R's and break SSURGO/gNATSGO (which expect
+# the list form). Keep these names unique.
+robust_SDA_query_alderman <- function(query, max_retries = 3, retry_delay_seconds = 5) {
   for (attempt in seq_len(max_retries)) {
     result <- try(soilDB::SDA_query(query), silent = TRUE)
     if (!inherits(result, "try-error")) return(result)
@@ -13,7 +20,7 @@ robust_SDA_query <- function(query, max_retries = 3, retry_delay_seconds = 5) {
   NULL
 }
 
-robust_SDA_spatialQuery <- function(point_sf, what, max_retries = 3, retry_delay_seconds = 5) {
+robust_SDA_spatialQuery_alderman <- function(point_sf, what, max_retries = 3, retry_delay_seconds = 5) {
   for (attempt in seq_len(max_retries)) {
     result <- try(soilDB::SDA_spatialQuery(point_sf, what = what), silent = TRUE)
     if (!inherits(result, "try-error")) return(result)
@@ -230,7 +237,7 @@ sql_in_from_values <- function(x) {
 }
 
 get_point_component_table <- function(point_sf, point_id = NULL, log_file = NULL) {
-  spatial_hit <- robust_SDA_spatialQuery(point_sf, what = 'mukey')
+  spatial_hit <- robust_SDA_spatialQuery_alderman(point_sf, what = 'mukey')
   mukeys <- character(0)
   if (!is.null(spatial_hit) && 'mukey' %in% names(spatial_hit)) {
     mukeys <- unique(na.omit(as.character(spatial_hit$mukey)))
@@ -253,7 +260,7 @@ get_point_component_table <- function(point_sf, point_id = NULL, log_file = NULL
       "FROM mapunit mu ",
       "WHERE mu.mukey IN (SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('", wkt, "'))"
     )
-    mukey_out <- robust_SDA_query(mukey_query)
+    mukey_out <- robust_SDA_query_alderman(mukey_query)
     if (!is.null(mukey_out) && nrow(mukey_out) > 0 && 'mukey' %in% names(mukey_out)) {
       mukeys <- unique(na.omit(as.character(mukey_out$mukey)))
       soil_helper_log(log_file, "INFO", "SSURGO_COMPONENTS",
@@ -276,7 +283,7 @@ get_point_component_table <- function(point_sf, point_id = NULL, log_file = NULL
     "COALESCE(drainagecl,'') AS drainage, COALESCE(albedodry_r,'') AS albedodry_r ",
     "FROM component WHERE mukey IN ", sql_in_from_values(mukeys)
   )
-  comp_tbl <- robust_SDA_query(comp_query)
+  comp_tbl <- robust_SDA_query_alderman(comp_query)
   if (is.null(comp_tbl)) {
     soil_helper_log(log_file, "ERROR", "SSURGO_COMPONENTS",
                     "Component query returned NULL",
@@ -308,7 +315,7 @@ get_component_horizons <- function(cokey, point_id = NULL, log_file = NULL) {
     "chorizon.cokey FROM chorizon LEFT JOIN chfrags ON chfrags.chkey = chorizon.chkey ",
     "WHERE chorizon.cokey IN ('", cokey, "') ORDER BY chorizon.hzdepb_r"
   )
-  hz <- robust_SDA_query(q)
+  hz <- robust_SDA_query_alderman(q)
   if (is.null(hz)) {
     soil_helper_log(log_file, "ERROR", "SSURGO_HORIZONS",
                     sprintf("Horizon query returned NULL for cokey=%s", as.character(cokey)[1]),
@@ -618,7 +625,7 @@ calculate_soil_properties_fallback <- function(soil_properties, top_depth, botto
 
 build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl = NULL, log_file = NULL) {
   soil_helper_log(log_file, "INFO", "SSURGO_FALLBACK", "Starting weighted-layer fallback profile build", point_id = point_id)
-  spatial_hit <- robust_SDA_spatialQuery(point_sf, what = 'mukey')
+  spatial_hit <- robust_SDA_spatialQuery_alderman(point_sf, what = 'mukey')
   mukeys <- if (!is.null(spatial_hit) && 'mukey' %in% names(spatial_hit)) unique(na.omit(as.character(spatial_hit$mukey))) else character(0)
   if (length(mukeys) == 0) {
     soil_helper_log(log_file, "ERROR", "SSURGO_FALLBACK", "No mukey found from fallback spatial query", point_id = point_id)
@@ -629,7 +636,7 @@ build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl
                   point_id = point_id)
 
   q_bedrock <- paste0("SELECT mukey, brockdepmin FROM muaggatt WHERE mukey IN ", sql_in_from_values(mukeys))
-  bedrock_data <- robust_SDA_query(q_bedrock)
+  bedrock_data <- robust_SDA_query_alderman(q_bedrock)
   bedrock_depth <- 200
   if (!is.null(bedrock_data) && nrow(bedrock_data) > 0 && 'brockdepmin' %in% names(bedrock_data)) {
     bd_vals <- suppressWarnings(as.numeric(bedrock_data$brockdepmin))
@@ -669,7 +676,7 @@ build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl
     "FROM component INNER JOIN chorizon ON component.cokey = chorizon.cokey ",
     "WHERE component.mukey IN ", sql_in_from_values(mukeys)
   )
-  props <- robust_SDA_query(q_soil)
+  props <- robust_SDA_query_alderman(q_soil)
   if (is.null(props)) {
     soil_helper_log(log_file, "ERROR", "SSURGO_FALLBACK", "Fallback property query returned NULL", point_id = point_id)
     return(NULL)
@@ -896,7 +903,7 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
     parallel::clusterEvalQ(cl, suppressPackageStartupMessages({library(soilDB); library(sf); library(dplyr); library(tidyr); library(stringr); library(readr)}))
     parallel::clusterExport(cl,
                   varlist = c(
-                    "robust_SDA_query", "robust_SDA_spatialQuery", "%||%",
+                    "robust_SDA_query_alderman", "robust_SDA_spatialQuery_alderman", "%||%",
                     "safe_first_non_na", "coalesce_num", "clip01", "sanitize_char", "sql_in_from_values",
                     "soil_ptf_saxton_slll", "soil_ptf_saxton_sdul", "soil_ptf_saxton_ssat",
                     "soil_ptf_saxton_ssks", "soil_ptf_slu1", "soil_ptf_nrcs_hsg",
