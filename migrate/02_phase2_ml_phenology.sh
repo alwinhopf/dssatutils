@@ -18,10 +18,12 @@
 # Idempotent; backs up every touched file. Run from anywhere.
 set -uo pipefail
 
-REPO="/Users/alwinhopf/Documents/GitHub/DSSAT ML Phenology Prediction"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-${GITHUB_WORKSPACE:-$(cd "$SCRIPT_DIR/../.." && pwd)}}"
+REPO="${REPO:-$WORKSPACE_ROOT/DSSAT_ML_Phenology_Prediction}"
 PKG_TAG="alwinhopf/dssatutils@v0.1.0"
 USE_LOCAL="${USE_LOCAL:-0}"                 # 1 = install from local path (no remote yet)
-LOCAL_PKG="/Users/alwinhopf/Documents/GitHub/dssatutils"
+LOCAL_PKG="${LOCAL_PKG:-$WORKSPACE_ROOT/dssatutils}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP="$REPO/.migration_backup_$STAMP"
 

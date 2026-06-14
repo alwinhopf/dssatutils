@@ -100,7 +100,10 @@ def _cap_end_date_era5_land(end_year, lag_days=5):
 
 
 def _download_era5_land_point_csv(latitude, longitude, start_date_str, end_date_str, target_file, cds_user="ecmwfr"):
-    import cdsapi  # imported lazily
+    try:
+        import cdsapi  # imported lazily
+    except ImportError as exc:
+        raise ImportError("ERA5-Land requires the 'cdsapi' Python package.") from exc
     c = cdsapi.Client()
 
     req = {
@@ -289,12 +292,6 @@ def process_weather_era5_land(
     if cache_dir is None:
         cache_dir = os.path.join(output_dir, "_era5_cache")
     os.makedirs(cache_dir, exist_ok=True)
-
-    # Validate that cdsapi is importable
-    try:
-        import cdsapi  # noqa: F401
-    except ImportError:
-        raise ImportError("ERA5-Land requires the 'cdsapi' Python package.")
 
     jobs = []
     for _, row in shapefile.iterrows():

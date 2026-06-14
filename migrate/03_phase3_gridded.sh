@@ -6,11 +6,13 @@
 # Run AFTER dssatutils remote+tag exist (or USE_LOCAL=1 for local path install).
 set -uo pipefail
 
-REPO="/Users/alwinhopf/Documents/GitHub/DSSAT Gridded Run Tutorial"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-${GITHUB_WORKSPACE:-$(cd "$SCRIPT_DIR/../.." && pwd)}}"
+REPO="${REPO:-$WORKSPACE_ROOT/DSSAT_Gridded_Run_Tutorial}"
 PKG_TAG="alwinhopf/dssatutils@v0.1.0"
 PIP_PIN="dssatutils @ git+https://github.com/alwinhopf/dssatutils.git@v0.1.0"
 USE_LOCAL="${USE_LOCAL:-0}"
-LOCAL_PKG="/Users/alwinhopf/Documents/GitHub/dssatutils"
+LOCAL_PKG="${LOCAL_PKG:-$WORKSPACE_ROOT/dssatutils}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP="$REPO/.migration_backup_$STAMP"
 
