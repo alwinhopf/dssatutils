@@ -1,5 +1,7 @@
 # dssatutils
 
+> **AI agents & maintainers:** read [`../AGENTS.md`](../AGENTS.md) before editing this repo.
+
 Shared **weather** and **soil** download utilities for DSSAT gridded / spatial
 crop-model pipelines. One versioned home for the download logic that was
 previously duplicated between:

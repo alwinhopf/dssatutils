@@ -226,22 +226,7 @@ def process_soils_soilgrids(
     soil_lats = soil_df["lat"].values
     soil_lons = soil_df["lon"].values
 
-    if _HAS_GEOPANDAS:
-        soil_gdf = gpd.GeoDataFrame(
-            soil_df,
-            geometry=gpd.points_from_xy(soil_lons, soil_lats),
-            crs="EPSG:4326",
-        )
-        gp_gdf = gpd.GeoDataFrame(
-            gp_df.reset_index(drop=True),
-            geometry=gpd.points_from_xy(gp_lons, gp_lats),
-            crs="EPSG:4326",
-        )
-        nearest_idx = gp_gdf.geometry.apply(
-            lambda pt: soil_gdf.geometry.distance(pt).idxmin()
-        ).values
-    else:
-        nearest_idx = _haversine_nearest(gp_lats, gp_lons, soil_lats, soil_lons)
+    nearest_idx = _haversine_nearest(gp_lats, gp_lons, soil_lats, soil_lons)
 
     nearest = soil_df.iloc[nearest_idx].reset_index(drop=True)
 
