@@ -11,7 +11,7 @@ missing, submodules are imported lazily via ``__getattr__`` (PEP 562).
 """
 from importlib import import_module
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 # public name -> submodule that defines it
 _EXPORTS = {
@@ -30,6 +30,7 @@ _EXPORTS = {
     "process_soils_soilgrids_online": "soil_soilgrids_online",
     "process_soils_ssurgo": "soil_ssurgo",
     "process_soils_ssurgo_alderman": "soil_ssurgo_alderman",
+    "process_soils_polaris": "soil_polaris",
     "process_soils_hwsd": "soil_hwsd",
     "process_soils_gnatsgo": "soil_gnatsgo",
     "process_soils_isdasoil": "soil_isdasoil",

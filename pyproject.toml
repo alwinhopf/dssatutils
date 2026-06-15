@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dssatutils"
-version = "0.1.3"
+version = "0.2.0"
 description = "Shared weather & soil download utilities for DSSAT gridded pipelines"
 readme = "README.md"
 requires-python = ">=3.9"
