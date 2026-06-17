@@ -36,19 +36,19 @@ future uncertainty-ensemble layer).
 ### R
 ```r
 # install.packages("remotes")
-remotes::install_github("alwinhopf/dssatutils@v0.1.0")
+remotes::install_github("alwinhopf/dssatutils@v0.2.0")
 library(dssatutils)
 ```
 
 ### Python
 ```bash
-pip install "git+https://github.com/alwinhopf/dssatutils.git@v0.1.0"
+pip install "git+https://github.com/alwinhopf/dssatutils.git@v0.2.0"
 # AgERA5 backend (optional, needs a Copernicus CDS key):
-pip install "dssatutils[agera5] @ git+https://github.com/alwinhopf/dssatutils.git@v0.1.0"
+pip install "dssatutils[agera5] @ git+https://github.com/alwinhopf/dssatutils.git@v0.2.0"
 ```
 or pin in `requirements.txt`:
 ```
-dssatutils @ git+https://github.com/alwinhopf/dssatutils.git@v0.1.0
+dssatutils @ git+https://github.com/alwinhopf/dssatutils.git@v0.2.0
 ```
 
 ```python
@@ -58,7 +58,7 @@ from dssatutils import process_weather_nasapower, process_soils_ssurgo
 ## Versioning
 
 Semantic versioning with Git tags. **Consumer repos always pin to a tag**
-(`@v0.1.0`), never `main`, so upstream changes never break a pipeline until you
+(`@vX.Y.Z`), never `main`, so upstream changes never break a pipeline until you
 deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
 `vX.Y.Z` → bump the pin in each consumer repo.
 
