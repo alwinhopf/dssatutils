@@ -52,18 +52,53 @@ def _calc_amp(tmax_arr: np.ndarray, tmin_arr: np.ndarray,
     return float(annual.mean())
 
 
-def _download_nc(url: str, dest: str, timeout: int = 3600) -> bool:
-    """Stream-download a NetCDF file; return True on success."""
+def _validate_gridmet_nc(path: str, abbrev: str) -> bool:
+    """Return True only if *path* opens as a readable GridMET NetCDF.
+
+    A partial/truncated NetCDF can have the right filename and non-zero size but
+    fail only later during extraction. We open metadata and force-read a small
+    data slice so corrupt HDF/NetCDF internals are caught before the file enters
+    the cache.
+    """
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return False
+    try:
+        with xr.open_dataset(path) as ds:
+            var_key = abbrev if abbrev in ds else (list(ds.data_vars)[0] if ds.data_vars else None)
+            if var_key is None or not ds[var_key].dims:
+                return False
+            time_dim = ds[var_key].dims[0]
+            if time_dim not in ("time", "day"):
+                return False
+            if ds.sizes.get(time_dim, 0) < 1:
+                return False
+            sample = ds[var_key].isel({time_dim: 0}).load()
+            if sample.size == 0:
+                return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Invalid/corrupt NetCDF cache file {os.path.basename(path)}: {exc}")
+        return False
+
+
+def _download_nc(url: str, dest: str, abbrev: str, timeout: int = 3600) -> bool:
+    """Stream-download a NetCDF file, validate it, then atomically promote it."""
     tmp_dest = dest + ".tmp"
+    if os.path.exists(tmp_dest):
+        try:
+            os.remove(tmp_dest)
+        except OSError:
+            pass
     try:
         with requests.get(url, stream=True, timeout=timeout) as r:
             r.raise_for_status()
             with open(tmp_dest, "wb") as fh:
                 for chunk in r.iter_content(chunk_size=1 << 20):
-                    fh.write(chunk)
-        if os.path.exists(dest):
-            os.remove(dest)
-        os.rename(tmp_dest, dest)
+                    if chunk:
+                        fh.write(chunk)
+        if not _validate_gridmet_nc(tmp_dest, abbrev):
+            raise RuntimeError("downloaded file failed NetCDF validation")
+        os.replace(tmp_dest, dest)
         return True
     except Exception as exc:
         print(f"Download error ({url}): {exc}")
@@ -160,9 +195,16 @@ def process_weather_gridmet(
 
     def _download_task(task):
         var_name, yr, url, dest = task
+        abbrev = _GRIDMET_VARS[var_name]
+        if os.path.exists(dest) and not _validate_gridmet_nc(dest, abbrev):
+            print(f"  Removing corrupt cached GridMET file: {os.path.basename(dest)}")
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
         if not os.path.exists(dest):
             print(f"  Downloading {os.path.basename(dest)}...")
-            success = _download_nc(url, dest)
+            success = _download_nc(url, dest, abbrev)
             if not success:
                 print(f"  Failed to download {os.path.basename(dest)}")
         return var_name, yr, dest
@@ -172,7 +214,7 @@ def process_weather_gridmet(
         futures = {executor.submit(_download_task, t): t for t in tasks}
         for future in as_completed(futures):
             var_name, yr, dest = future.result()
-            if os.path.exists(dest):
+            if os.path.exists(dest) and _validate_gridmet_nc(dest, _GRIDMET_VARS[var_name]):
                 downloaded[var_name][yr] = dest
 
     # -----------------------------------------------------------------------

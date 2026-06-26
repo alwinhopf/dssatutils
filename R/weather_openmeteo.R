@@ -35,6 +35,22 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
                         "precipitation_sum", "shortwave_radiation_sum",
                         "wind_speed_10m_max"), collapse = ",")
 
+  if (n_cores > 1) {
+    message(sprintf(
+      "Open-Meteo is rate-limited; using 1 weather core instead of %d to avoid 429 failures.",
+      n_cores
+    ))
+    n_cores <- 1L
+  }
+  request_delay <- suppressWarnings(as.numeric(Sys.getenv("OPEN_METEO_REQUEST_DELAY_SECONDS", "20")))
+  if (is.na(request_delay) || request_delay < 0) request_delay <- 20
+  minutely_sleep <- suppressWarnings(as.numeric(Sys.getenv("OPEN_METEO_MINUTELY_LIMIT_SLEEP_SECONDS", "75")))
+  if (is.na(minutely_sleep) || minutely_sleep < 1) minutely_sleep <- 75
+  hourly_sleep <- suppressWarnings(as.numeric(Sys.getenv("OPEN_METEO_HOURLY_LIMIT_SLEEP_SECONDS", "3700")))
+  if (is.na(hourly_sleep) || hourly_sleep < 1) hourly_sleep <- 3700
+  max_attempts <- suppressWarnings(as.integer(Sys.getenv("OPEN_METEO_MAX_ATTEMPTS", "12")))
+  if (is.na(max_attempts) || max_attempts < 1L) max_attempts <- 12L
+
   cl <- parallel::makeCluster(n_cores)
   # Safety net: release the cluster even if the download errors out before the
   # explicit stopCluster() below. try() keeps it harmless on the normal path.
@@ -60,19 +76,49 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
     if (file.exists(output_file)) return(NULL)
 
     tryCatch({
-      # --- Fetch with simple exponential back-off (handles 429) ---
+      if (request_delay > 0 && i > 1) Sys.sleep(request_delay)
+
+      # --- Fetch with back-off that respects Open-Meteo's rate-limit messages ---
       resp <- NULL
-      for (attempt in 1:4) {
+      last_status <- NA_integer_
+      last_reason <- NA_character_
+      for (attempt in seq_len(max_attempts)) {
         r <- httr::GET("https://archive-api.open-meteo.com/v1/archive",
                        query = list(latitude = latitude, longitude = longitude,
                                     start_date = start_date_str, end_date = end_date_str,
                                     daily = daily_vars, windspeed_unit = "ms",
                                     timezone = "UTC"),
                        httr::timeout(180))
-        if (httr::status_code(r) == 200) { resp <- r; break }
-        Sys.sleep(5 * attempt)
+        last_status <- httr::status_code(r)
+        body_txt <- httr::content(r, as = "text", encoding = "UTF-8")
+        if (last_status == 200) {
+          resp <- r
+          break
+        }
+
+        last_reason <- tryCatch({
+          parsed <- jsonlite::fromJSON(body_txt)
+          if (!is.null(parsed$reason)) as.character(parsed$reason) else substr(body_txt, 1, 250)
+        }, error = function(e) substr(body_txt, 1, 250))
+
+        wait_seconds <- 10 * attempt
+        if (last_status == 429 && grepl("hour", last_reason, ignore.case = TRUE)) {
+          wait_seconds <- hourly_sleep
+        } else if (last_status == 429 && grepl("minute", last_reason, ignore.case = TRUE)) {
+          wait_seconds <- minutely_sleep
+        }
+        retry_message <- sprintf(
+          "Open-Meteo %s attempt %d/%d returned HTTP %s: %s; waiting %.0f sec",
+          point_id, attempt, max_attempts, last_status, last_reason, wait_seconds
+        )
+        cat(retry_message, "\n")
+        write(retry_message, file = log_file, append = TRUE)
+        Sys.sleep(wait_seconds)
       }
-      if (is.null(resp)) stop("Open-Meteo request failed after retries.")
+      if (is.null(resp)) {
+        stop(sprintf("Open-Meteo request failed after %d attempt(s). Last HTTP %s: %s",
+                     max_attempts, last_status, last_reason))
+      }
 
       d     <- jsonlite::fromJSON(httr::content(resp, as = "text", encoding = "UTF-8"))
       daily <- d$daily

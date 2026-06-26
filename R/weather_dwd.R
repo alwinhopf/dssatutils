@@ -222,7 +222,9 @@ process_weather_dwd <- function(shapefile, start_year, end_year, output_dir,
         daily <- get_daily(sid)
         if (!is.data.frame(daily) || nrow(daily) == 0) next
         f <- .dwd_build_frame(daily, stations$lat[j], start_year, end_year)
-        if (nrow(f) >= 30) { frame <- f; used <- stations[j, ]; break }
+        if (nrow(f) >= 30 && sum(is.na(f$RAIN)) < nrow(f)) {
+          frame <- f; used <- stations[j, ]; break
+        }
       }
       if (is.null(frame))
         stop(sprintf("no DWD station within %.0f km with data for %d-%d", max_station_km, start_year, end_year))

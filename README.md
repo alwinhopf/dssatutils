@@ -18,12 +18,20 @@ Each function fetches data from a public source and writes DSSAT-format
 
 | Domain | Sources (function name is the same in R and Python) |
 |---|---|
-| Weather | `process_weather_daymet`, `process_weather_gridmet`, `process_weather_nasapower`, `process_weather_openmeteo`, `process_weather_agera5`, `process_weather_nasapower_chirps`, `process_weather_cmfd`, `process_weather_dwd`, `process_weather_eobs`, `process_weather_xavier`, `process_weather_era5_land` |
-| Soil | `process_soils_ssurgo`, `process_soils_ssurgo_alderman`, `process_soils_polaris`, `process_soils_soilgrids`, `process_soils_soilgrids_online`, `process_soils_hwsd`, `process_soils_gnatsgo`, `process_soils_isdasoil`, `process_soils_lucas` |
+| Weather | `process_weather_daymet`, `process_weather_gridmet`, `process_weather_nasapower`, `process_weather_openmeteo`, `process_weather_agera5`, `process_weather_nasapower_chirps`, `process_weather_cmfd`, `process_weather_dwd`, `process_weather_eobs`, `process_weather_xavier`, `process_weather_era5_land`, `process_weather_chelsa_w5e5`, `process_weather_agmerra`, `process_weather_agcfsr`, `process_weather_silo`, `process_weather_prism`, `process_weather_mswx`, `process_weather_mswep`, `process_weather_crujra`, `process_weather_terraclimate`, `process_weather_aphrodite`, `process_weather_anusplin`, `process_weather_tamsat`, `process_weather_ghcn`, `process_weather_pgf`, `process_weather_merra2` |
+| Soil | `process_soils_ssurgo`, `process_soils_ssurgo_alderman`, `process_soils_polaris`, `process_soils_soilgrids`, `process_soils_soilgrids_online`, `process_soils_hwsd`, `process_soils_agmip`, `process_soils_hihydrosoil`, `process_soils_slga`, `process_soils_wise30sec`, `process_soils_wosis`, `process_soils_gnatsgo`, `process_soils_isdasoil`, `process_soils_lucas`, `process_soils_gsde`, `process_soils_china`, `process_soils_febr`, `process_soils_slc`, `process_soils_esdb`, `process_soils_openlandmap` |
 
 Coverage notes: Daymet = North America; GridMET/SSURGO/gNATSGO/POLARIS = USA; NASA POWER /
 Open-Meteo / AgERA5 / ERA5-Land / SoilGrids / HWSD2 = global; iSDAsoil = Africa;
-LUCAS = Europe topsoil; CMFD = China; DWD = Germany; E-OBS = Europe; Xavier = Brazil.
+LUCAS = Europe topsoil; CMFD = China; DWD = Germany; E-OBS = Europe; Xavier = Brazil;
+SILO/SLGA = Australia; PRISM = CONUS; CHELSA-W5E5 / AgMERRA / AgCFSR / HiHydroSoil /
+MSWX / MSWEP / CRU-JRA / TerraClimate / WISE30sec / WoSIS = global or near-global.
+AgMIP/Han = global 5 arc-min DSSAT-ready country `.SOL` files (local download required).
+Newer regional fills: APHRODITE = monsoon Asia rainfall (NASA-POWER hybrid); ANUSPLIN = Canada;
+TAMSAT = Africa rainfall (NASA-POWER hybrid); PGF / MERRA-2 = global reanalysis; GHCN-Daily =
+global station obs (live NOAA download, nearest-station). Soil: GSDE = global 1 km 8-layer;
+China BNU = China; FEBR/Embrapa = Brazil; SLC = Canada; ESDB = Europe full profile;
+OpenLandMap = global 250 m (live COG sampling, no local data).
 AgERA5, ERA5-Land, and E-OBS require a free Copernicus CDS API key; CHIRPS fuses
 NASA POWER with high-res rainfall (50S–50N). POLARIS is a 30 m probabilistic
 disaggregation of SSURGO (Chaney et al. 2019); `process_soils_polaris` builds
@@ -36,19 +44,19 @@ future uncertainty-ensemble layer).
 ### R
 ```r
 # install.packages("remotes")
-remotes::install_github("alwinhopf/dssatutils@v0.2.0")
+remotes::install_github("alwinhopf/dssatutils@v0.4.0")
 library(dssatutils)
 ```
 
 ### Python
 ```bash
-pip install "git+https://github.com/alwinhopf/dssatutils.git@v0.2.0"
+pip install "git+https://github.com/alwinhopf/dssatutils.git@v0.4.0"
 # AgERA5 backend (optional, needs a Copernicus CDS key):
-pip install "dssatutils[agera5] @ git+https://github.com/alwinhopf/dssatutils.git@v0.2.0"
+pip install "dssatutils[agera5] @ git+https://github.com/alwinhopf/dssatutils.git@v0.4.0"
 ```
 or pin in `requirements.txt`:
 ```
-dssatutils @ git+https://github.com/alwinhopf/dssatutils.git@v0.2.0
+dssatutils @ git+https://github.com/alwinhopf/dssatutils.git@v0.4.0
 ```
 
 ```python
@@ -64,6 +72,12 @@ deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
 
 ## Known limitations / notes
 
+- **Optional weather repair and QA** is available after provider downloads via
+  `repair_weather_missing_values()`, `repair_weather_date_gaps()`,
+  `repair_weather_temperature_inversions()`, and `audit_weather_quality()`.
+  Repair functions only modify short runs with valid before/after neighbors;
+  the audit writes flag-only findings to CSV and appends notes to
+  `weather_repair.log`.
 - **GridMET** RH2M and TDEW are *estimated* (`TDEW ≈ TMIN − 2.5`, RH from the
   diurnal temperature range), not measured.
 - **Open-Meteo** has no daily dewpoint/RH, so it writes `TDEW = -99`, `RH2M = -99`

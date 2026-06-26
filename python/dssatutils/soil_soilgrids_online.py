@@ -123,7 +123,13 @@ def _format_dssat_sol_file(site_data: pd.DataFrame, output_dir: str,
 
         sand = float(layer["sand"])
         clay = float(layer["clay"])
-        ssks = min(999.0, 60.96 * (10 ** (0.0126 * sand - 0.0064 * clay - 0.6)))
+        # Prefer a measured/source SSKS (cm/h) when the caller supplies one (e.g.
+        # HiHydroSoil); else fall back to the texture-based Saxton-Rawls estimate.
+        measured_ssks = layer["SSKS"] if "SSKS" in layer.index else np.nan
+        if pd.notna(measured_ssks) and float(measured_ssks) > 0:
+            ssks = min(999.0, float(measured_ssks))
+        else:
+            ssks = min(999.0, 60.96 * (10 ** (0.0126 * sand - 0.0064 * clay - 0.6)))
 
         lines.append(
             f"{int(layer['depth_bottom']):6d}   -99"

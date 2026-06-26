@@ -3,6 +3,44 @@
 # Optimized for >10,000 points. 
 # Processes points in batches to prevent RAM crashes. No Parallel Cluster.
 
+.gridmet_valid_netcdf <- function(path, min_layers = 1) {
+  if (!file.exists(path) || is.na(file.info(path)$size) || file.info(path)$size == 0) return(FALSE)
+  tryCatch({
+    r <- suppressWarnings(terra::rast(path))
+    if (terra::nlyr(r) < min_layers) return(FALSE)
+    e <- terra::ext(r)
+    xy <- matrix(c((e[1] + e[2]) / 2, (e[3] + e[4]) / 2), ncol = 2)
+    invisible(terra::extract(r[[1]], xy))
+    TRUE
+  }, error = function(e) {
+    message(sprintf("  Invalid/corrupt NetCDF cache file %s: %s",
+                    basename(path), conditionMessage(e)))
+    FALSE
+  })
+}
+
+.download_valid_netcdf <- function(url, dest, min_layers = 1) {
+  if (file.exists(dest) && .gridmet_valid_netcdf(dest, min_layers)) return(TRUE)
+  if (file.exists(dest)) {
+    message(sprintf("  Removing corrupt cached NetCDF: %s", basename(dest)))
+    unlink(dest)
+  }
+  tmp <- paste0(dest, ".tmp-", Sys.getpid())
+  unlink(tmp)
+  ok <- tryCatch({
+    utils::download.file(url, tmp, mode = "wb", quiet = TRUE)
+    TRUE
+  }, error = function(e) {
+    message("Download error: ", conditionMessage(e))
+    FALSE
+  })
+  if (!ok || !.gridmet_valid_netcdf(tmp, min_layers)) {
+    unlink(tmp)
+    return(FALSE)
+  }
+  file.rename(tmp, dest)
+}
+
 process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir, 
                                     id_col, lat_col, lon_col, n_cores, log_file, gridmet_cache_dir,
                                     chunk_size = 3000) { # Added chunk_size argument
@@ -39,11 +77,11 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
       dest_file <- file.path(gridmet_cache_dir, file_name)
       url <- paste0("http://www.northwestknowledge.net/metdata/data/", file_name)
       
-      if (!file.exists(dest_file)) {
-        tryCatch({ httr::GET(url, httr::write_disk(dest_file, overwrite = TRUE)) }, 
-                 error = function(e) message("Download error: ", e$message))
+      if (!file.exists(dest_file) || !.gridmet_valid_netcdf(dest_file)) {
+        message(sprintf("  Downloading/repairing GridMET cache file: %s", file_name))
+        .download_valid_netcdf(url, dest_file)
       }
-      if (file.exists(dest_file)) downloaded_files[[var_name]][[year]] <- dest_file
+      if (file.exists(dest_file) && .gridmet_valid_netcdf(dest_file)) downloaded_files[[var_name]][[year]] <- dest_file
     }
   }
   

@@ -236,7 +236,7 @@ sql_in_from_values <- function(x) {
   paste0("(", paste(sprintf("'%s'", escaped), collapse = ","), ")")
 }
 
-get_point_component_table <- function(point_sf, point_id = NULL, log_file = NULL) {
+get_point_component_table <- function(point_sf, point_id = NULL, log_file = NULL, STATSGO = FALSE) {
   spatial_hit <- robust_SDA_spatialQuery_alderman(point_sf, what = 'mukey')
   mukeys <- character(0)
   if (!is.null(spatial_hit) && 'mukey' %in% names(spatial_hit)) {
@@ -258,7 +258,9 @@ get_point_component_table <- function(point_sf, point_id = NULL, log_file = NULL
     mukey_query <- paste0(
       "SELECT DISTINCT mu.mukey AS mukey ",
       "FROM mapunit mu ",
-      "WHERE mu.mukey IN (SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('", wkt, "'))"
+      "INNER JOIN legend lgd ON mu.lkey = lgd.lkey ",
+      "WHERE mu.mukey IN (SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('", wkt, "')) ",
+      "AND ", if (STATSGO) "lgd.areaname = 'United States'" else "lgd.areaname != 'United States'"
     )
     mukey_out <- robust_SDA_query_alderman(mukey_query)
     if (!is.null(mukey_out) && nrow(mukey_out) > 0 && 'mukey' %in% names(mukey_out)) {
@@ -277,11 +279,16 @@ get_point_component_table <- function(point_sf, point_id = NULL, log_file = NULL
     return(NULL)
   }
 
+  source_condition <- if (STATSGO) "legend.areaname = 'United States'" else "legend.areaname != 'United States'"
   comp_query <- paste0(
-    "SELECT compname, cokey, mukey, COALESCE(comppct_r,'') AS comppct_r, ",
-    "COALESCE(hydgrp,'') AS hydgrp, COALESCE(slope_r,'') AS slope_r, ",
-    "COALESCE(drainagecl,'') AS drainage, COALESCE(albedodry_r,'') AS albedodry_r ",
-    "FROM component WHERE mukey IN ", sql_in_from_values(mukeys)
+    "SELECT component.compname, component.cokey, component.mukey, COALESCE(component.comppct_r,'') AS comppct_r, ",
+    "COALESCE(component.hydgrp,'') AS hydgrp, COALESCE(component.slope_r,'') AS slope_r, ",
+    "COALESCE(component.drainagecl,'') AS drainage, COALESCE(component.albedodry_r,'') AS albedodry_r ",
+    "FROM component ",
+    "INNER JOIN mapunit ON component.mukey = mapunit.mukey ",
+    "INNER JOIN legend ON mapunit.lkey = legend.lkey ",
+    "WHERE component.mukey IN ", sql_in_from_values(mukeys),
+    " AND ", source_condition
   )
   comp_tbl <- robust_SDA_query_alderman(comp_query)
   if (is.null(comp_tbl)) {
@@ -298,8 +305,7 @@ get_point_component_table <- function(point_sf, point_id = NULL, log_file = NULL
   }
   comp_tbl <- as.data.frame(comp_tbl)
   soil_helper_log(log_file, "INFO", "SSURGO_COMPONENTS",
-                  sprintf("Component query returned %d row(s) across %d cokey(s)",
-                          nrow(comp_tbl), dplyr::n_distinct(comp_tbl$cokey)),
+                  sprintf("Component query returned %d row(s)", nrow(comp_tbl)),
                   point_id = point_id)
   comp_tbl
 }
@@ -375,11 +381,147 @@ calc_ssat_measured <- function(h_tbl) {
   coalesce_num(ssat_wsat, ssat_tenth, ssat_third, 0.95 * (1 - h_tbl$dbovendry_r / partdensity))
 }
 
-build_dssat_profile_from_component <- function(component_row, horizon_tbl, point_id, lat, lon, log_file = NULL) {
+# ---- Spatial name queries coord filtering (adapted from csmsoil filter_mukey_by_coord) ----
+filter_mukey_by_coord_alderman <- function(mukey_tbl, pt_geom, soil_name) {
+  # Expanding search radii in meters (equivalent to 1km to 2000km)
+  radii <- c(1e3, 1e4, 5e4, 1e5 * 1:10, 1e6 + 1e5 * 1:10)
+
+  mukey_subset <- NULL
+  for (radius in radii) {
+    query_wkt <- pt_geom %>%
+      sf::st_geometry() %>%
+      sf::st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs ") %>%
+      sf::st_buffer(dist = radius) %>%
+      sf::st_transform(crs = 4326) %>%
+      sf::st_geometry() %>%
+      sf::st_as_text()
+
+    mukeys_in <- unique(na.omit(as.character(mukey_tbl$mukey)))
+    q_wkt_mukey <- paste0(
+      "SELECT mukey, muname FROM mapunit ",
+      "WHERE mukey IN (SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('", query_wkt, "')) ",
+      "AND mukey IN ", sql_in_from_values(mukeys_in)
+    )
+    mukey_subset <- robust_SDA_query_alderman(q_wkt_mukey)
+    if (!is.null(mukey_subset) && nrow(mukey_subset) > 0) break
+  }
+
+  if (is.null(mukey_subset) || nrow(mukey_subset) == 0) {
+    return(mukey_tbl %>% dplyr::slice(1) %>% dplyr::pull(mukey))
+  }
+
+  if (nrow(mukey_subset) > 1) {
+    mukeys_subset_in <- unique(na.omit(as.character(mukey_subset$mukey)))
+    q_geom <- paste0(
+      "SELECT G.MupolygonWktWgs84 AS geom, mapunit.mukey AS mukey ",
+      "FROM mapunit CROSS APPLY SDA_Get_MupolygonWktWgs84_from_Mukey(mapunit.mukey) AS G ",
+      "WHERE mukey IN ", sql_in_from_values(mukeys_subset_in)
+    )
+    mukey_geom <- robust_SDA_query_alderman(q_geom)
+    if (!is.null(mukey_geom) && nrow(mukey_geom) > 0) {
+      mukey_geom_sf <- sf::st_as_sf(as.data.frame(mukey_geom), wkt = "geom", crs = 4326) %>%
+        sf::st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs ")
+
+      query_pt <- pt_geom %>%
+        sf::st_as_sf() %>%
+        sf::st_transform(crs = sf::st_crs(mukey_geom_sf))
+
+      nearest_idx <- sf::st_nearest_feature(query_pt, mukey_geom_sf)
+      nearest_mukey <- mukey_geom_sf$mukey[nearest_idx]
+      return(nearest_mukey)
+    }
+  }
+
+  mukey_subset$mukey[1]
+}
+
+# ---- Layer Discretization: Horizon-to-Standard-Layers aggregator ----
+aggregate_horizons_to_standard_layers <- function(horizon_tbl, bedrock_depth) {
+  all_layers <- list(
+    "0-5cm" = c(0, 5), "5-20cm" = c(5, 20), "20-35cm" = c(20, 35),
+    "35-50cm" = c(35, 50), "50-65cm" = c(50, 65), "65-80cm" = c(65, 80),
+    "80-95cm" = c(80, 95), "95-110cm" = c(95, 110), "110-125cm" = c(110, 125),
+    "125-140cm" = c(125, 140), "140-155cm" = c(140, 155), "155-170cm" = c(155, 170),
+    "170-185cm" = c(170, 185), "185-200cm" = c(185, 200)
+  )
+  valid_layers <- all_layers[sapply(all_layers, function(x) x[1] < bedrock_depth)]
+  if (length(valid_layers) > 0) {
+    last <- length(valid_layers)
+    if (valid_layers[[last]][2] > bedrock_depth) valid_layers[[last]][2] <- bedrock_depth
+    names(valid_layers)[last] <- paste0(valid_layers[[last]][1], "-", valid_layers[[last]][2], "cm")
+  } else {
+    valid_layers <- list()
+    valid_layers[[paste0("0-", bedrock_depth, "cm")]] <- c(0, bedrock_depth)
+  }
+
+  results_list <- lapply(names(valid_layers), function(layer_name) {
+    d <- valid_layers[[layer_name]]
+    top_d <- d[1]
+    bot_d <- d[2]
+
+    overlapping <- horizon_tbl %>%
+      dplyr::mutate(
+        adj_top = pmax(hzdept_r, top_d),
+        adj_bottom = pmin(hzdepb_r, bot_d),
+        thickness = adj_bottom - adj_top
+      ) %>%
+      dplyr::filter(thickness > 0)
+
+    if (nrow(overlapping) == 0) return(NULL)
+
+    total_thickness <- sum(overlapping$thickness, na.rm = TRUE)
+
+    cols_to_avg <- c(
+      "dbovendry_r", "dbtenthbar_r", "dbthirdbar_r", "dbfifteenbar_r",
+      "wsatiated_r", "wtenthbar_r", "wthirdbar_r", "partdensity", "ksat_r",
+      "wfifteenbar_r", "sandtotal_r", "claytotal_r", "silttotal_r", "om_r", "fragvol_r"
+    )
+
+    summarized <- list(
+      hzdept_r = top_d,
+      hzdepb_r = bot_d,
+      cokey = overlapping$cokey[1],
+      hzname = paste(unique(na.omit(overlapping$hzname)), collapse = "/")
+    )
+
+    for (col in cols_to_avg) {
+      if (col %in% names(overlapping)) {
+        val <- if (all(is.na(overlapping[[col]]))) {
+          NA_real_
+        } else {
+          sum(overlapping[[col]] * overlapping$thickness, na.rm = TRUE) / total_thickness
+        }
+        summarized[[col]] <- val
+      } else {
+        summarized[[col]] <- NA_real_
+      }
+    }
+
+    as.data.frame(summarized, stringsAsFactors = FALSE)
+  })
+
+  results_list <- results_list[!sapply(results_list, is.null)]
+  if (length(results_list) == 0) return(NULL)
+  dplyr::bind_rows(results_list)
+}
+
+build_dssat_profile_from_component <- function(component_row, horizon_tbl, point_id, lat, lon, log_file = NULL, standardize_layers = FALSE) {
   soil_helper_log(log_file, "INFO", "SSURGO_DOMINANT",
                   sprintf("Building dominant profile from cokey=%s with %d raw horizon row(s)",
                           as.character(component_row$cokey[1]), nrow(horizon_tbl)),
                   point_id = point_id)
+
+  if (standardize_layers) {
+    bedrock_depth <- max(suppressWarnings(as.numeric(horizon_tbl$hzdepb_r)), na.rm = TRUE)
+    if (!is.finite(bedrock_depth) || is.na(bedrock_depth) || bedrock_depth <= 0) bedrock_depth <- 200
+
+    horizon_tbl <- aggregate_horizons_to_standard_layers(horizon_tbl, bedrock_depth)
+    if (is.null(horizon_tbl) || nrow(horizon_tbl) == 0) {
+      soil_helper_log(log_file, "ERROR", "SSURGO_DOMINANT", "Layer standardization aggregated 0 layers", point_id = point_id)
+      return(NULL)
+    }
+  }
+
   hz <- horizon_tbl %>%
     dplyr::mutate(dplyr::across(c(hzdept_r, hzdepb_r, dbovendry_r, dbtenthbar_r, dbthirdbar_r,
                     dbfifteenbar_r, wsatiated_r, wtenthbar_r, wthirdbar_r,
@@ -493,6 +635,13 @@ build_dssat_profile_from_component <- function(component_row, horizon_tbl, point
     return(NULL)
   }
 
+  if (all(is.na(hz$SLLL)) || all(is.na(hz$SDUL)) || all(is.na(hz$SSAT))) {
+    soil_helper_log(log_file, "ERROR", "SSURGO_DOMINANT",
+                    "Dominant component profile has all NA for hydraulic properties",
+                    point_id = point_id)
+    return(NULL)
+  }
+
   soil_helper_log(log_file, "INFO", "SSURGO_DOMINANT",
                   sprintf("Dominant profile retained %d DSSAT layer(s): %s",
                           nrow(hz), paste(hz$SLB, collapse = ",")),
@@ -509,7 +658,10 @@ build_dssat_profile_from_component <- function(component_row, horizon_tbl, point
     country = "USA",
     scs_family = "",
     scom = "SC",
-    salb = coalesce_num(as.numeric(component_row$albedodry_r), 0.13),
+    salb = {
+      val <- suppressWarnings(as.numeric(component_row$albedodry_r[1]))
+      if (is.null(val) || is.na(val) || val <= 0) 0.13 else val
+    },
     slu1 = round(slu1, 1),
     sldr = sldr_from_drainage(component_row$drainage),
     slro = soil_ptf_curve_number(safe_first_non_na(suppressWarnings(as.numeric(component_row$slope_r)), 0),
@@ -629,12 +781,27 @@ calculate_soil_properties_fallback <- function(soil_properties, top_depth, botto
   grouped
 }
 
-build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl = NULL, log_file = NULL) {
+build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl = NULL, log_file = NULL, STATSGO = FALSE) {
   soil_helper_log(log_file, "INFO", "SSURGO_FALLBACK", "Starting weighted-layer fallback profile build", point_id = point_id)
   spatial_hit <- robust_SDA_spatialQuery_alderman(point_sf, what = 'mukey')
   mukeys <- if (!is.null(spatial_hit) && 'mukey' %in% names(spatial_hit)) unique(na.omit(as.character(spatial_hit$mukey))) else character(0)
+  if (length(mukeys) > 0) {
+    source_condition <- if (STATSGO) "lgd.areaname = 'United States'" else "lgd.areaname != 'United States'"
+    q_filter <- paste0(
+      "SELECT mu.mukey FROM mapunit mu ",
+      "INNER JOIN legend lgd ON mu.lkey = lgd.lkey ",
+      "WHERE mu.mukey IN ", sql_in_from_values(mukeys),
+      " AND ", source_condition
+    )
+    res_filter <- robust_SDA_query_alderman(q_filter)
+    if (!is.null(res_filter) && nrow(res_filter) > 0) {
+      mukeys <- unique(na.omit(as.character(res_filter$mukey)))
+    } else {
+      mukeys <- character(0)
+    }
+  }
   if (length(mukeys) == 0) {
-    soil_helper_log(log_file, "ERROR", "SSURGO_FALLBACK", "No mukey found from fallback spatial query", point_id = point_id)
+    soil_helper_log(log_file, "ERROR", "SSURGO_FALLBACK", "No mukey found from fallback spatial query matching source criteria", point_id = point_id)
     return(NULL)
   }
   soil_helper_log(log_file, "INFO", "SSURGO_FALLBACK",
@@ -750,6 +917,11 @@ build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl
     return(NULL)
   }
 
+  if (all(is.na(layers$SLLL)) || all(is.na(layers$SDUL)) || all(is.na(layers$SSAT))) {
+    soil_helper_log(log_file, "ERROR", "SSURGO_FALLBACK", "Fallback profile has all NA for hydraulic properties", point_id = point_id)
+    return(NULL)
+  }
+
   soil_helper_log(log_file, "INFO", "SSURGO_FALLBACK",
                   sprintf("Fallback profile retained %d DSSAT layer(s): %s",
                           nrow(layers), paste(layers$SLB, collapse = ",")),
@@ -766,7 +938,10 @@ build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl
     country = 'USA',
     scs_family = '',
     scom = 'SC',
-    salb = coalesce_num(suppressWarnings(as.numeric(dom_comp$albedodry_r)), 0.13),
+    salb = {
+      val <- suppressWarnings(as.numeric(dom_comp$albedodry_r[1]))
+      if (is.null(val) || is.na(val) || val <= 0) 0.13 else val
+    },
     slu1 = round(slu1, 1),
     sldr = sldr_from_drainage(dom_comp$drainage %||% 'Well drained'),
     slro = soil_ptf_curve_number(
@@ -797,7 +972,8 @@ build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl
 }
 
 # ---- Point processor ---------------------------------------------------------
-process_one_ssurgo_point <- function(point_data_row, id_col, lat_col, long_col, output_dir_individual, log_file = NULL) {
+process_one_ssurgo_point <- function(point_data_row, id_col, lat_col, long_col, output_dir_individual, log_file = NULL,
+                                     soil_name = NULL, STATSGO = FALSE, standardize_layers = FALSE) {
   point_id <- as.character(point_data_row[[id_col]])
   lat <- as.numeric(point_data_row[[lat_col]])
   lon <- as.numeric(point_data_row[[long_col]])
@@ -805,34 +981,53 @@ process_one_ssurgo_point <- function(point_data_row, id_col, lat_col, long_col, 
 
   soil_helper_log(log_file, "INFO", "SSURGO_POINT", "Starting SSURGO point processing", point_id = point_id)
   profile <- NULL
-  comp_tbl <- get_point_component_table(point_sf, point_id = point_id, log_file = log_file)
-  if (!is.null(comp_tbl) && nrow(comp_tbl) > 0) {
-    component_row <- choose_dominant_component(comp_tbl)
-    soil_helper_log(log_file, "INFO", "SSURGO_POINT",
-                    sprintf("Selected dominant component cokey=%s compname=%s comppct_r=%s",
-                            as.character(component_row$cokey[1]),
-                            as.character(component_row$compname[1]),
-                            as.character(component_row$comppct_r[1])),
-                    point_id = point_id)
-    horizon_tbl <- get_component_horizons(component_row$cokey[1], point_id = point_id, log_file = log_file)
-    if (!is.null(horizon_tbl) && nrow(horizon_tbl) > 0) {
-      profile <- build_dssat_profile_from_component(component_row, horizon_tbl, point_id, lat, lon, log_file = log_file)
-      if (!is.null(profile)) {
-        soil_helper_log(log_file, "INFO", "SSURGO_POINT", "Built profile from dominant component/horizon data", point_id = point_id)
+
+  if (!is.null(soil_name) && !is.na(soil_name) && soil_name != "") {
+    profile <- pull_profile_by_name_alderman(
+      soil_name = soil_name,
+      pt_geom = point_sf,
+      lat = lat,
+      long = lon,
+      SSURGO = !STATSGO,
+      STATSGO = STATSGO,
+      standardize_layers = standardize_layers,
+      log_file = log_file,
+      profile_id = point_id
+    )
+  } else {
+    comp_tbl <- get_point_component_table(point_sf, point_id = point_id, log_file = log_file, STATSGO = STATSGO)
+    if (!is.null(comp_tbl) && nrow(comp_tbl) > 0) {
+      component_row <- choose_dominant_component(comp_tbl)
+      soil_helper_log(log_file, "INFO", "SSURGO_POINT",
+                      sprintf("Selected dominant component cokey=%s compname=%s comppct_r=%s",
+                              as.character(component_row$cokey[1]),
+                              as.character(component_row$compname[1]),
+                              as.character(component_row$comppct_r[1])),
+                      point_id = point_id)
+      horizon_tbl <- get_component_horizons(component_row$cokey[1], point_id = point_id, log_file = log_file)
+      if (!is.null(horizon_tbl) && nrow(horizon_tbl) > 0) {
+        profile <- build_dssat_profile_from_component(
+          component_row, horizon_tbl, point_id, lat, lon,
+          log_file = log_file, standardize_layers = standardize_layers
+        )
+        if (!is.null(profile)) {
+          soil_helper_log(log_file, "INFO", "SSURGO_POINT", "Built profile from dominant component/horizon data", point_id = point_id)
+        } else {
+          soil_helper_log(log_file, "WARN", "SSURGO_POINT", "Dominant component profile builder returned NULL", point_id = point_id)
+        }
       } else {
-        soil_helper_log(log_file, "WARN", "SSURGO_POINT", "Dominant component profile builder returned NULL", point_id = point_id)
+        soil_helper_log(log_file, "WARN", "SSURGO_POINT", "No horizons available for dominant component; skipping to fallback", point_id = point_id)
       }
     } else {
-      soil_helper_log(log_file, "WARN", "SSURGO_POINT", "No horizons available for dominant component; skipping to fallback", point_id = point_id)
+      soil_helper_log(log_file, "WARN", "SSURGO_POINT", "No component table available; skipping to fallback", point_id = point_id)
     }
-  } else {
-    soil_helper_log(log_file, "WARN", "SSURGO_POINT", "No component table available; skipping to fallback", point_id = point_id)
+
+    if (is.null(profile)) {
+      soil_helper_log(log_file, "WARN", "SSURGO_POINT", "Falling back to weighted-layer SSURGO profile logic", point_id = point_id)
+      profile <- build_simple_fallback_profile(point_sf, point_id, lat, lon, comp_tbl, log_file = log_file, STATSGO = STATSGO)
+    }
   }
 
-  if (is.null(profile)) {
-    soil_helper_log(log_file, "WARN", "SSURGO_POINT", "Falling back to weighted-layer SSURGO profile logic", point_id = point_id)
-    profile <- build_simple_fallback_profile(point_sf, point_id, lat, lon, comp_tbl, log_file = log_file)
-  }
   if (is.null(profile)) {
     soil_helper_log(log_file, "ERROR", "SSURGO_POINT", "No soil profile could be generated for this point", point_id = point_id)
     return(NULL)
@@ -848,7 +1043,8 @@ process_one_ssurgo_point <- function(point_data_row, id_col, lat_col, long_col, 
 #'
 #' @export
 process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_dir_individual, n_cores,
-                                          id_col, lat_col, long_col, format_sql_func, log_file = NULL) {
+                                          id_col, lat_col, long_col, format_sql_func, log_file = NULL,
+                                          soil_names = NULL, STATSGO = FALSE, standardize_layers = FALSE) {
   message("Starting SSURGO Processing (dominant component/measured tension fallbacks)...")
   soil_helper_log(log_file, "INFO", "SSURGO_MAIN", "Starting SSURGO Processing (dominant component/measured tension fallbacks)")
 
@@ -856,6 +1052,17 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
   if (!lat_col %in% names(grid_df)) grid_df[[lat_col]] <- sf::st_coordinates(grid_points)[, 2]
   if (!long_col %in% names(grid_df)) grid_df[[long_col]] <- sf::st_coordinates(grid_points)[, 1]
   grid_df[[id_col]] <- as.character(grid_df[[id_col]])
+  grid_df$.row_idx <- seq_len(nrow(grid_df))
+
+  if (is.null(soil_names)) {
+    if ("soil_name" %in% names(grid_df)) {
+      soil_names <- grid_df[["soil_name"]]
+    } else if ("soil_names" %in% names(grid_df)) {
+      soil_names <- grid_df[["soil_names"]]
+    } else if ("compname" %in% names(grid_df)) {
+      soil_names <- grid_df[["compname"]]
+    }
+  }
 
   dir.create(dirname(output_dir_csv), recursive = TRUE, showWarnings = FALSE)
   dir.create(output_dir_individual, recursive = TRUE, showWarnings = FALSE)
@@ -885,8 +1092,14 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
   }
 
   process_point_wrapper <- function(row_df) {
+    idx <- row_df$.row_idx[1]
+    soil_name <- if (!is.null(soil_names)) soil_names[idx] else NULL
     tryCatch(
-      process_one_ssurgo_point(row_df, id_col, lat_col, long_col, output_dir_individual, log_file = log_file),
+      process_one_ssurgo_point(
+        row_df, id_col, lat_col, long_col, output_dir_individual,
+        log_file = log_file, soil_name = soil_name, STATSGO = STATSGO,
+        standardize_layers = standardize_layers
+      ),
       error = function(e) {
         point_id <- as.character(row_df[[id_col]][1])
         message(sprintf("SSURGO point %s failed: %s", point_id, e$message))
@@ -919,7 +1132,10 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
                     "calculate_soil_properties_fallback", "build_simple_fallback_profile",
                     "build_dssat_profile_from_component", "format_dssat_decimal", "format_dssat_numeric",
                     "write_dssat_soil_file", "append_log_line", "soil_helper_log", "process_one_ssurgo_point", "process_point_wrapper",
-                    "id_col", "lat_col", "long_col", "output_dir_individual", "log_file"
+                    "id_col", "lat_col", "long_col", "output_dir_individual", "log_file",
+                    "filter_mukey_by_coord_alderman", "aggregate_horizons_to_standard_layers",
+                    "pull_profile_by_name_alderman", "pull_profile_by_coords_alderman",
+                    "soil_names", "STATSGO", "standardize_layers"
                   ),
                   envir = environment())
   } else {
@@ -996,4 +1212,189 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
   message("SSURGO Processing Complete.")
   soil_helper_log(log_file, "INFO", "SSURGO_MAIN", "SSURGO Processing Complete.")
   TRUE
+}
+
+# ---- Soil Pull by Name / Coordinates API -------------------------------------
+
+#' Pull soil profile by name using Alderman SSURGO/STATSGO logic
+#'
+#' @param soil_name Character string, name of the soil series (compname)
+#' @param pt_geom sf object representing the point location (optional, for spatial proximity selection if multiple mukeys match)
+#' @param lat Numeric, latitude (optional, if pt_geom is not provided)
+#' @param long Numeric, longitude (optional, if pt_geom is not provided)
+#' @param SSURGO Logical, search SSURGO source (legend areaname != 'United States')
+#' @param STATSGO Logical, search STATSGO source (legend areaname = 'United States')
+#' @param standardize_layers Logical, whether to aggregate horizons to standard 14 DSSAT layers
+#' @param log_file Path to log file (optional)
+#' @param profile_id Character, custom profile ID to use in the returned object (optional)
+#' @return A profile list structure or NULL
+#' @export
+pull_profile_by_name_alderman <- function(soil_name, pt_geom = NULL, lat = NULL, long = NULL,
+                                          SSURGO = TRUE, STATSGO = FALSE, standardize_layers = FALSE,
+                                          log_file = NULL, profile_id = NULL) {
+  soil_helper_log(log_file, "INFO", "PULL_BY_NAME", paste("Pulling profile by name:", soil_name))
+
+  if (is.null(pt_geom) && !is.null(lat) && !is.null(long)) {
+    pt_geom <- sf::st_sfc(sf::st_point(c(as.numeric(long), as.numeric(lat))), crs = 4326)
+  }
+
+  comp_condition <- paste0("compname IN ", sql_in_from_values(soil_name))
+
+  if (!SSURGO) {
+    source_condition <- " AND lgd.areaname = 'United States'"
+  } else if (!STATSGO) {
+    source_condition <- " AND lgd.areaname != 'United States'"
+  } else {
+    source_condition <- ""
+  }
+
+  mukey_query <- paste0(
+    "SELECT lgd.areaname AS area_name, compname AS soil_name, co.mukey AS mukey, cokey ",
+    "FROM component co ",
+    "INNER JOIN mapunit mu ON co.mukey = mu.mukey ",
+    "INNER JOIN legend lgd ON mu.lkey = lgd.lkey ",
+    "WHERE ", comp_condition, source_condition,
+    " AND cokey IN (SELECT cokey FROM chorizon)"
+  )
+
+  mukey_out <- robust_SDA_query_alderman(mukey_query)
+  if (is.null(mukey_out) || nrow(mukey_out) == 0) {
+    soil_helper_log(log_file, "WARN", "PULL_BY_NAME", paste("No mukeys found for name", soil_name))
+    return(NULL)
+  }
+
+  if (nrow(mukey_out) > 1 && !is.null(pt_geom)) {
+    nearest_mukey <- filter_mukey_by_coord_alderman(mukey_out, pt_geom, soil_name)
+    mukey_out <- mukey_out[mukey_out$mukey == nearest_mukey, , drop = FALSE]
+  }
+
+  comp_cokeys <- unique(na.omit(as.character(mukey_out$cokey)))
+  comp_query <- paste0(
+    "SELECT compname, cokey, mukey, COALESCE(comppct_r,'') AS comppct_r, ",
+    "COALESCE(hydgrp,'') AS hydgrp, COALESCE(slope_r,'') AS slope_r, ",
+    "COALESCE(drainagecl,'') AS drainage, COALESCE(albedodry_r,'') AS albedodry_r ",
+    "FROM component WHERE cokey IN ", sql_in_from_values(comp_cokeys)
+  )
+
+  comp_tbl <- robust_SDA_query_alderman(comp_query)
+  if (is.null(comp_tbl) || nrow(comp_tbl) == 0) {
+    soil_helper_log(log_file, "WARN", "PULL_BY_NAME", "No component records found for candidate cokeys")
+    return(NULL)
+  }
+
+  component_row <- choose_dominant_component(comp_tbl)
+  horizon_tbl <- get_component_horizons(component_row$cokey[1], point_id = soil_name, log_file = log_file)
+  if (is.null(horizon_tbl) || nrow(horizon_tbl) == 0) {
+    soil_helper_log(log_file, "WARN", "PULL_BY_NAME", "No horizon records found for dominant component")
+    return(NULL)
+  }
+
+  profile_lat <- if (!is.null(pt_geom)) as.numeric(sf::st_coordinates(pt_geom)[, 2]) else NA_real_
+  profile_lon <- if (!is.null(pt_geom)) as.numeric(sf::st_coordinates(pt_geom)[, 1]) else NA_real_
+  if (is.na(profile_lat) || is.na(profile_lon)) {
+    profile_lat <- 39.0
+    profile_lon <- -95.0
+  }
+
+  prof_id <- if (!is.null(profile_id)) profile_id else soil_name
+
+  build_dssat_profile_from_component(
+    component_row, horizon_tbl,
+    point_id = prof_id,
+    lat = profile_lat,
+    lon = profile_lon,
+    log_file = log_file,
+    standardize_layers = standardize_layers
+  )
+}
+
+#' Pull soil profile by coordinates using Alderman SSURGO/STATSGO logic
+#'
+#' @param pt_geom sf object representing the point location
+#' @param lat Numeric, latitude (optional, if pt_geom is not provided)
+#' @param long Numeric, longitude (optional, if pt_geom is not provided)
+#' @param site Character, site name to use in the profile
+#' @param SSURGO Logical, search SSURGO source (legend areaname != 'United States')
+#' @param STATSGO Logical, search STATSGO source (legend areaname = 'United States')
+#' @param standardize_layers Logical, whether to aggregate horizons to standard 14 DSSAT layers
+#' @param log_file Path to log file (optional)
+#' @return A profile list structure or NULL
+#' @export
+pull_profile_by_coords_alderman <- function(pt_geom = NULL, lat = NULL, long = NULL, site = "SITE",
+                                            SSURGO = TRUE, STATSGO = FALSE, standardize_layers = FALSE,
+                                            log_file = NULL) {
+  if (is.null(pt_geom) && (is.null(lat) || is.null(long))) {
+    stop("Either pt_geom or lat and long must be supplied.")
+  }
+
+  if (is.null(pt_geom)) {
+    pt_geom <- sf::st_sfc(sf::st_point(c(as.numeric(long), as.numeric(lat))), crs = 4326)
+  }
+
+  profile_lat <- as.numeric(sf::st_coordinates(pt_geom)[, 2])
+  profile_lon <- as.numeric(sf::st_coordinates(pt_geom)[, 1])
+
+  soil_helper_log(log_file, "INFO", "PULL_BY_COORDS", sprintf("Pulling profile by coords: %f, %f", profile_lat, profile_lon))
+
+  wkt <- sf::st_as_text(sf::st_geometry(pt_geom))
+
+  if (!SSURGO) {
+    source_condition <- " AND lgd.areaname = 'United States'"
+  } else if (!STATSGO) {
+    source_condition <- " AND lgd.areaname != 'United States'"
+  } else {
+    source_condition <- ""
+  }
+
+  mukey_query <- paste0(
+    "SELECT lgd.areaname AS area_name, compname AS soil_name, co.mukey AS mukey, cokey ",
+    "FROM component co ",
+    "INNER JOIN mapunit mu ON co.mukey = mu.mukey ",
+    "INNER JOIN legend lgd ON mu.lkey = lgd.lkey ",
+    "WHERE mu.mukey IN (",
+    "  SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('", wkt, "')",
+    ")", source_condition,
+    " AND cokey IN (SELECT cokey FROM chorizon)"
+  )
+
+  mukey_out <- robust_SDA_query_alderman(mukey_query)
+  if (is.null(mukey_out) || nrow(mukey_out) == 0) {
+    # Try fallback build
+    soil_helper_log(log_file, "WARN", "PULL_BY_COORDS", "No components found with standard query; trying fallback")
+    return(build_simple_fallback_profile(pt_geom, site, profile_lat, profile_lon, comp_tbl = NULL, log_file = log_file, STATSGO = STATSGO))
+  }
+
+  comp_cokeys <- unique(na.omit(as.character(mukey_out$cokey)))
+  comp_query <- paste0(
+    "SELECT compname, cokey, mukey, COALESCE(comppct_r,'') AS comppct_r, ",
+    "COALESCE(hydgrp,'') AS hydgrp, COALESCE(slope_r,'') AS slope_r, ",
+    "COALESCE(drainagecl,'') AS drainage, COALESCE(albedodry_r,'') AS albedodry_r ",
+    "FROM component WHERE cokey IN ", sql_in_from_values(comp_cokeys)
+  )
+
+  comp_tbl <- robust_SDA_query_alderman(comp_query)
+  if (is.null(comp_tbl) || nrow(comp_tbl) == 0) {
+    return(build_simple_fallback_profile(pt_geom, site, profile_lat, profile_lon, comp_tbl = NULL, log_file = log_file, STATSGO = STATSGO))
+  }
+
+  component_row <- choose_dominant_component(comp_tbl)
+  horizon_tbl <- get_component_horizons(component_row$cokey[1], point_id = site, log_file = log_file)
+
+  profile <- NULL
+  if (!is.null(horizon_tbl) && nrow(horizon_tbl) > 0) {
+    profile <- build_dssat_profile_from_component(
+      component_row, horizon_tbl,
+      point_id = site,
+      lat = profile_lat,
+      lon = profile_lon,
+      log_file = log_file,
+      standardize_layers = standardize_layers
+    )
+  }
+
+  if (is.null(profile)) {
+    profile <- build_simple_fallback_profile(pt_geom, site, profile_lat, profile_lon, comp_tbl, log_file = log_file, STATSGO = STATSGO)
+  }
+
+  profile
 }

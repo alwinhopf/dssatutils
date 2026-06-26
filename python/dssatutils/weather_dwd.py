@@ -225,6 +225,7 @@ def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
 
     *df* must contain DATE (YYYYDOY str), SRAD, TMAX, TMIN, RAIN, TDEW, RH2M, WIND.
     """
+    df = df.copy()
     tav = _calc_tav(df)
     amp = _calc_amp(df)
     elev_str = f"{elev:5.0f}" if (elev is not None and np.isfinite(elev)) else "  -99"
@@ -360,11 +361,13 @@ def process_weather_dwd(
                 if daily.empty:
                     continue
                 f = _build_point_frame(daily, stations.iloc[k]["lat"], start_year, end_year)
-                if not f.empty and len(f) >= 30:      # need a usable record
+                if (not f.empty and len(f) >= 30
+                        and f["RAIN"].notna().any()):  # need a usable record
                     frame = f; used = stations.iloc[k]; break
             if frame is None:
                 raise ValueError(f"no DWD station within {max_station_km:.0f} km with data for {start_year}-{end_year}")
-            frame = frame.fillna(-99)
+            optional = ["SRAD", "RAIN", "TDEW", "RH2M", "WIND"]
+            frame[optional] = frame[optional].fillna(-99)
             elev = used["elev"] if "elev" in used else np.nan
             # Write at the STATION coordinates (where the obs actually are).
             _write_wth(frame, pid, float(used["lat"]), float(used["lon"]), elev, output_dir)

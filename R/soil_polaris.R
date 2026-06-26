@@ -103,9 +103,9 @@ ssks_cmhr <- function(ksat) {
 # ------------------------------------------------------------------------------
 #  2. DSSAT .SOL formatter
 # ------------------------------------------------------------------------------
-format_dssat_sol_file <- function(site_data, output_dir,
-                                  source_name = "POLARIS v1.0",
-                                  source_tag = "p50") {
+format_dssat_sol_file_polaris <- function(site_data, output_dir,
+                                          source_name = "POLARIS v1.0",
+                                          source_tag = "p50") {
   if (nrow(site_data) == 0) stop("No soil layers found for this ID.")
   if (all(is.na(site_data$clay)) || all(is.na(site_data$silt)) ||
       all(is.na(site_data$bd))) {
@@ -245,7 +245,7 @@ process_soils_polaris <- function(gridfile, soilfile_csv_path, output_sol_dir,
   for (uid in unique(final_df$ID)) {
     subset_df <- final_df[final_df$ID == uid, , drop = FALSE]
     res <- tryCatch({
-      format_dssat_sol_file(subset_df, output_sol_dir, source_tag = stat); TRUE
+      format_dssat_sol_file_polaris(subset_df, output_sol_dir, source_tag = stat); TRUE
     }, error = function(e) {
       cat(sprintf("ID: %s | Error: %s\n", uid, conditionMessage(e)),
           file = log_path, append = TRUE); FALSE

@@ -124,12 +124,77 @@ test_that("LUCAS .SOL writer flags topsoil extrapolation", {
 })
 
 # ===================================================================
+# Shared gridded weather / raster-soil helpers
+# ===================================================================
+test_that("gridded weather writer produces DSSAT WTH", {
+  dates <- seq(as.Date("2001-01-01"), as.Date("2001-12-31"), by = "day")
+  df <- data.frame(
+    DATE = sprintf("%d%03d", as.integer(format(dates, "%Y")), as.integer(format(dates, "%j"))),
+    YEAR = as.integer(format(dates, "%Y")), MM = as.integer(format(dates, "%m")),
+    SRAD = 18, TMAX = 25, TMIN = 12, RAIN = 2, TDEW = 9, RH2M = 70, WIND = 2)
+  work <- tempfile(); dir.create(work); on.exit(unlink(work, recursive = TRUE))
+  weather_write_wth(df, "WX1", 35, -90, work, "TESTGRID", "TGRD")
+  txt <- readLines(file.path(work, "WX1.WTH"))
+  expect_true(grepl("\\$WEATHER DATA: TESTGRID", txt[1]))
+  expect_true(any(grepl("@  DATE", txt)))
+  expect_equal(weather_convert_units(300, "K", "temp"), 26.85, tolerance = 1e-6)
+  expect_equal(weather_convert_units(100, "W m-2", "srad"), 8.64, tolerance = 1e-6)
+})
+
+test_that("raster soil texture helper maps USDA class", {
+  expect_equal(as.numeric(soil_texture_to_pct(9)), c(32, 34, 34))
+})
+
+test_that("corrupt NetCDF validators reject bogus cache files", {
+  bad <- tempfile(fileext = ".nc")
+  writeBin(charToRaw("not a netcdf"), bad)
+  expect_false(dssatutils:::.gridmet_valid_netcdf(bad))
+  expect_false(dssatutils:::.chirps_valid_netcdf(bad))
+})
+
+# ===================================================================
+# AgMIP/Han: wrapper around external .SOL mapper
+# ===================================================================
+test_that("AgMIP wrapper maps external DSSAT profiles", {
+  master <- c(
+    "*AGMIP001 AgMIP test profile A",
+    "@SITE        COUNTRY          LAT     LONG SCS FAMILY",
+    " SITEA       Test          10.0000  20.0000 -99",
+    "@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI",
+    "    15   -99 0.100 0.250 0.430 1.00  -99 1.30 1.20 22.0 38.0",
+    "*AGMIP002 AgMIP test profile B",
+    "@SITE        COUNTRY          LAT     LONG SCS FAMILY",
+    " SITEB       Test         -12.0000  35.0000 -99",
+    "@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI",
+    "    15   -99 0.120 0.270 0.440 1.00  -99 1.25 1.40 28.0 34.0"
+  )
+  work <- tempfile(); dir.create(work); on.exit(unlink(work, recursive = TRUE))
+  master_path <- file.path(work, "AGMIP_TEST.SOL")
+  writeLines(master, master_path, useBytes = TRUE)
+  points <- data.frame(ID = "P7", LAT = -12.1, LONG = 35.1)
+  mapping <- process_soils_agmip(points, master_path, file.path(work, "soil.csv"),
+                                 file.path(work, "sol"))
+  expect_equal(mapping$SOURCE_SOIL_ID[1], "AGMIP002")
+  out <- file.path(work, "sol", "00000007.SOL")
+  expect_true(file.exists(out))
+  expect_true(startsWith(readLines(out, n = 1), "*00000007"))
+})
+
+# ===================================================================
 # Public exports present
 # ===================================================================
 test_that("new public entry points are exported", {
   for (fn in c("process_soils_gnatsgo", "process_weather_dwd", "process_weather_eobs",
                "process_soils_isdasoil", "process_soils_lucas",
-               "process_weather_xavier", "process_weather_cmfd")) {
+               "process_weather_xavier", "process_weather_cmfd",
+               "process_soils_agmip",
+               "process_weather_chelsa_w5e5", "process_weather_agmerra",
+               "process_weather_agcfsr", "process_weather_silo",
+               "process_weather_prism", "process_soils_hihydrosoil",
+               "process_soils_slga", "process_weather_mswx",
+               "process_weather_mswep", "process_weather_crujra",
+               "process_weather_terraclimate", "process_soils_wise30sec",
+               "process_soils_wosis")) {
     expect_true(exists(fn, where = asNamespace("dssatutils")))
   }
 })

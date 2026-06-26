@@ -52,6 +52,7 @@ _AGERA5_VARS = {
     "WIND": ("10m_wind_speed", "statistic", "24_hour_mean"),          # m/s
 }
 _CDS_DATASET = "sis-agrometeorological-indicators"
+_AGERA5_CDS_REQUEST_CAP = 4
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +219,8 @@ def process_weather_agera5(
 
     # 1. Download every (variable, year) CONCURRENTLY. The CDS processes requests
     #    server-side, so submitting them in parallel overlaps the queue waits
-    #    instead of paying them one after another (≈Nx faster). Cap concurrency
-    #    at 4 to stay within the CDS per-user active-request limit.
+    #    instead of paying them one after another. Cap concurrency at 4 to avoid
+    #    hammering the CDS per-user active-request queue.
     point_series = {pid: {v: {} for v in _AGERA5_VARS} for pid in ids}
     pts_lat = None
 
@@ -233,8 +234,18 @@ def process_weather_agera5(
                 _download_agera5_var(cds_var, sel_kind, sel_value, year,
                                      area, agera5_cache_dir))
 
+    try:
+        requested_workers = int(n_cores)
+    except Exception:  # noqa: BLE001
+        requested_workers = 1
+    workers = max(1, min(requested_workers, _AGERA5_CDS_REQUEST_CAP, len(jobs)))
+    print(
+        f"  AgERA5 cache/download phase: {len(jobs)} variable-year job(s); "
+        f"using {workers} concurrent CDS request(s) (cap={_AGERA5_CDS_REQUEST_CAP})."
+    )
+
     paths = {}
-    with ThreadPoolExecutor(max_workers=min(4, len(jobs))) as pool:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         for dssat_var, year, path in pool.map(_dl, jobs):
             if path:
                 paths[(dssat_var, year)] = path

@@ -269,6 +269,9 @@ test_that("process_weather_gridmet runs successfully with mocks", {
       structure(list(), class = "MockSpatRaster")
     },
     cellFromXY = function(...) 1,
+    nlyr = function(...) 365,
+    ext = function(...) c(-125, -66.5, 25, 49.5),
+    extract = function(...) matrix(c(280.0, 281.0), nrow = 1),
     .package = "terra"
   )
   
@@ -401,9 +404,9 @@ test_that("process_soils_soilgrids_online runs successfully with mocks", {
   )
   
   shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
+  shapefile[["geometry"]] <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
   class(shapefile) <- c("sf", "data.frame")
   attr(shapefile, "sf_column") <- "geometry"
-  shapefile$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
   
   output_csv <- file.path(work_dir, "soil_map.csv")
   output_sol_dir <- file.path(work_dir, "individual_sol")
@@ -426,9 +429,9 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
   on.exit(unlink(work_dir, recursive = TRUE))
   
   shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
+  shapefile[["geometry"]] <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
   class(shapefile) <- c("sf", "data.frame")
   attr(shapefile, "sf_column") <- "geometry"
-  shapefile$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
   
   local_mocked_bindings(
     robust_SDA_spatialQuery = function(point_sf, what, ...) {
@@ -457,14 +460,15 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
   local_mocked_bindings(
     st_as_sf = function(...) {
       sf_obj <- data.frame(ID = "TEST1")
+      sf_obj[["geometry"]] <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
       class(sf_obj) <- c("sf", "data.frame")
       attr(sf_obj, "sf_column") <- "geometry"
-      sf_obj$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
       sf_obj
     },
     st_drop_geometry = function(x) {
-      x$geometry <- NULL
-      as.data.frame(x)
+      x[["geometry"]] <- NULL
+      class(x) <- "data.frame"
+      x
     },
     st_coordinates = function(...) matrix(c(-90.0, 40.0), nrow = 1),
     .package = "sf"
@@ -495,9 +499,9 @@ test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
   on.exit(unlink(work_dir, recursive = TRUE))
   
   shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
+  shapefile[["geometry"]] <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
   class(shapefile) <- c("sf", "data.frame")
   attr(shapefile, "sf_column") <- "geometry"
-  shapefile$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
   
   local_mocked_bindings(
     robust_SDA_spatialQuery = function(point_sf, what, ...) {
@@ -547,14 +551,15 @@ test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
   local_mocked_bindings(
     st_as_sf = function(...) {
       sf_obj <- data.frame(ID = "TEST1")
+      sf_obj[["geometry"]] <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
       class(sf_obj) <- c("sf", "data.frame")
       attr(sf_obj, "sf_column") <- "geometry"
-      sf_obj$geometry <- sf::st_sfc(sf::st_point(c(-90.0, 40.0)))
       sf_obj
     },
     st_drop_geometry = function(x) {
-      x$geometry <- NULL
-      as.data.frame(x)
+      x[["geometry"]] <- NULL
+      class(x) <- "data.frame"
+      x
     },
     st_coordinates = function(...) matrix(c(-90.0, 40.0), nrow = 1),
     st_as_text = function(...) "POINT(-90 40)",

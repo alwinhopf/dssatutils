@@ -65,17 +65,31 @@ def _download_chirps_year(year: int, res: str, cache_dir: str,
     import requests
     fname = f"chirps-v2.0.{year}.days_{res}.nc"
     dest = os.path.join(cache_dir, fname)
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+    if os.path.exists(dest) and _validate_chirps_nc(dest):
         return dest
+    if os.path.exists(dest):
+        print(f"  Removing corrupt cached CHIRPS file: {fname}")
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
     url = _CHIRPS_NC_URL.format(res=res, year=year)
     tmp = dest + ".part"
+    if os.path.exists(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
     try:
         print(f"  Downloading CHIRPS {year} ({res})... (large file; cached after first run)")
         with requests.get(url, stream=True, timeout=timeout) as r:
             r.raise_for_status()
             with open(tmp, "wb") as fh:
                 for chunk in r.iter_content(chunk_size=1 << 20):
-                    fh.write(chunk)
+                    if chunk:
+                        fh.write(chunk)
+        if not _validate_chirps_nc(tmp):
+            raise RuntimeError("downloaded file failed NetCDF validation")
         os.replace(tmp, dest)
         return dest
     except Exception as exc:  # noqa: BLE001
@@ -86,6 +100,27 @@ def _download_chirps_year(year: int, res: str, cache_dir: str,
             except OSError:
                 pass
         return None
+
+
+def _validate_chirps_nc(path: str) -> bool:
+    """Return True only if a CHIRPS NetCDF opens and has readable precip data."""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return False
+    try:
+        import xarray as xr
+        with xr.open_dataset(path) as ds:
+            var = "precip" if "precip" in ds else (list(ds.data_vars)[0] if ds.data_vars else None)
+            if var is None or "time" not in ds[var].dims:
+                return False
+            if ds.sizes.get("time", 0) < 1:
+                return False
+            sample = ds[var].isel(time=0).load()
+            if sample.size == 0:
+                return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Invalid/corrupt CHIRPS NetCDF {os.path.basename(path)}: {exc}")
+        return False
 
 
 def _extract_chirps_rain(nc_paths: list, ids: list, lats: np.ndarray,

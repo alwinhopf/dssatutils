@@ -1,14 +1,20 @@
 Package: dssatutils
 Type: Package
 Title: Shared Weather and Soil Download Utilities for DSSAT
-Version: 0.2.0
+Version: 0.4.0
 Authors@R: person("Alwin", "Hopf", email = "alwinhopf@gmail.com", role = c("aut", "cre"))
 Description: Reusable functions that download weather and soil data from a range of
     public sources (Daymet, GridMET, NASA POWER, Open-Meteo, AgERA5, NASA
     POWER + CHIRPS, DWD station data, E-OBS European grids, BR-DWGD/Xavier Brazil
-    grids, CMFD China grids; SSURGO, gNATSGO, iSDAsoil Africa, LUCAS Europe
-    topsoil, SoilGrids, SoilGrids 2.0 online, POLARIS, FAO HWSD2) and write
-    them as DSSAT .WTH and .SOL files for spatial / gridded crop-model runs.
+    grids, CMFD China grids, CHELSA-W5E5, AgMERRA, AgCFSR, SILO, PRISM, MSWX,
+    MSWEP, CRU-JRA, TerraClimate, APHRODITE Asia, ANUSPLIN Canada, TAMSAT Africa,
+    GHCN-Daily stations, Princeton PGF, MERRA-2; SSURGO, gNATSGO, iSDAsoil Africa,
+    LUCAS Europe topsoil, SoilGrids, SoilGrids 2.0 online, POLARIS, FAO HWSD2,
+    AgMIP/Han global DSSAT soil profiles, HiHydroSoil, SLGA, WISE30sec, WoSIS,
+    GSDE, China BNU, FEBR/Embrapa Brazil, Soil Landscapes of Canada, European
+    Soil Database, OpenLandMap)
+    and write them as DSSAT .WTH and .SOL files for spatial / gridded crop-model
+    runs.
     Shared by the DSSAT Gridded Run Tutorial and DSSAT ML Phenology Prediction
     projects so the download logic lives in one versioned place.
 License: MIT + file LICENSE

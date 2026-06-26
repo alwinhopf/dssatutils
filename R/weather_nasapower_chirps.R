@@ -17,6 +17,43 @@
 # ("p05" default or "p25").
 # ---------------------------------------------------------------------------
 
+.chirps_valid_netcdf <- function(path) {
+  if (!file.exists(path) || is.na(file.info(path)$size) || file.info(path)$size == 0) return(FALSE)
+  tryCatch({
+    r <- suppressWarnings(terra::rast(path))
+    if (terra::nlyr(r) < 1) return(FALSE)
+    e <- terra::ext(r)
+    xy <- matrix(c((e[1] + e[2]) / 2, (e[3] + e[4]) / 2), ncol = 2)
+    invisible(terra::extract(r[[1]], xy))
+    TRUE
+  }, error = function(e) {
+    message(sprintf("  Invalid/corrupt CHIRPS NetCDF %s: %s",
+                    basename(path), conditionMessage(e)))
+    FALSE
+  })
+}
+
+.download_valid_chirps <- function(url, dest) {
+  if (file.exists(dest) && .chirps_valid_netcdf(dest)) return(TRUE)
+  if (file.exists(dest)) {
+    message(sprintf("  Removing corrupt cached CHIRPS file: %s", basename(dest)))
+    unlink(dest)
+  }
+  tmp <- paste0(dest, ".part-", Sys.getpid())
+  unlink(tmp)
+  ok <- tryCatch({
+    utils::download.file(url, tmp, mode = "wb", quiet = TRUE)
+    TRUE
+  }, error = function(e) {
+    message("  CHIRPS download failed: ", conditionMessage(e))
+    FALSE
+  })
+  if (!ok || !.chirps_valid_netcdf(tmp)) {
+    unlink(tmp)
+    return(FALSE)
+  }
+  file.rename(tmp, dest)
+}
 
 process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
                                              output_dir, id_col, lat_col, lon_col,
@@ -57,15 +94,12 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
     for (yr in start_year:end_year) {
       fname <- sprintf("chirps-v2.0.%d.days_%s.nc", yr, res)
       dest  <- file.path(chirps_cache_dir, fname)
-      if (!file.exists(dest) || file.info(dest)$size == 0) {
+      if (!file.exists(dest) || !.chirps_valid_netcdf(dest)) {
         url <- sprintf("%s/%s/%s", base_url, res, fname)
         message(sprintf("  Downloading CHIRPS %d (%s)... (large; cached after first run)", yr, res))
-        tryCatch(
-          utils::download.file(url, dest, mode = "wb", quiet = TRUE),
-          error = function(e) message(sprintf("  CHIRPS %d download failed: %s",
-                                              yr, conditionMessage(e))))
+        .download_valid_chirps(url, dest)
       }
-      if (!file.exists(dest) || file.info(dest)$size == 0) next
+      if (!file.exists(dest) || !.chirps_valid_netcdf(dest)) next
       tryCatch({
         r <- terra::rast(dest)                      # one layer per day
         tvals <- terra::time(r)

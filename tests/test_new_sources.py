@@ -31,8 +31,154 @@ def test_new_modules_import_and_export():
     for name in ("process_soils_gnatsgo", "process_weather_dwd", "process_weather_eobs",
                  "process_soils_isdasoil", "process_soils_lucas",
                  "process_weather_xavier", "process_weather_cmfd",
-                 "process_weather_era5_land"):
+                 "process_weather_era5_land", "process_soils_agmip",
+                 "process_weather_chelsa_w5e5", "process_weather_agmerra",
+                 "process_weather_agcfsr", "process_weather_silo",
+                 "process_weather_prism", "process_soils_hihydrosoil",
+                 "process_soils_slga", "process_weather_mswx",
+                 "process_weather_mswep", "process_weather_crujra",
+                 "process_weather_terraclimate", "process_soils_wise30sec",
+                 "process_soils_wosis",
+                 "process_weather_aphrodite", "process_weather_anusplin",
+                 "process_weather_tamsat", "process_weather_ghcn",
+                 "process_weather_pgf", "process_weather_merra2",
+                 "process_soils_gsde", "process_soils_china", "process_soils_febr",
+                 "process_soils_slc", "process_soils_esdb", "process_soils_openlandmap"):
         assert hasattr(dssatutils, name), f"dssatutils missing public {name}"
+
+
+def test_gridded_weather_writer_and_unit_helpers():
+    from dssatutils import weather_gridded_common as g
+    dates = pd.date_range("2001-01-01", "2001-12-31", freq="D")
+    df = pd.DataFrame({
+        "DATE": [f"{d.year}{d.dayofyear:03d}" for d in dates],
+        "YEAR": dates.year, "MM": dates.month,
+        "SRAD": 18.0, "TMAX": 25.0, "TMIN": 12.0, "RAIN": 2.0,
+        "TDEW": 9.0, "RH2M": 70.0, "WIND": 2.0,
+    })
+    with tempfile.TemporaryDirectory() as work:
+        g.write_wth(df, "WX1", 35.0, -90.0, work, "TESTGRID", "TGRD")
+        text = open(os.path.join(work, "WX1.WTH")).read()
+        assert "$WEATHER DATA: TESTGRID" in text and "@  DATE" in text
+    assert abs(g.convert_units(np.array([300.0]), "K", "temp")[0] - 26.85) < 1e-6
+    assert abs(g.convert_units(np.array([100.0]), "W m-2", "srad")[0] - 8.64) < 1e-6
+
+
+def test_convert_units_wind_and_vapour_pressure():
+    from dssatutils import weather_gridded_common as g
+    # 10 m -> 2 m wind (FAO-56 log profile factor 0.748).
+    assert abs(g.convert_units(np.array([4.0]), "m s-1", "wind")[0] - 4.0 * 0.748) < 1e-9
+    # Vapour pressure ~12.27 hPa -> dewpoint near 10 C (inverse Magnus).
+    td = g.convert_units(np.array([12.27]), "hPa", "vp")[0]
+    assert abs(td - 10.0) < 0.5, f"vp->dewpoint off: {td}"
+
+
+def test_corrupt_netcdf_validators_reject_bogus_cache_files():
+    from dssatutils.weather_gridmet import _validate_gridmet_nc
+    from dssatutils.weather_nasapower_chirps import _validate_chirps_nc
+    with tempfile.TemporaryDirectory() as work:
+        bogus = os.path.join(work, "bad.nc")
+        with open(bogus, "wb") as fh:
+            fh.write(b"not a netcdf")
+        assert not _validate_gridmet_nc(bogus, "tmmn")
+        assert not _validate_chirps_nc(bogus)
+
+
+def test_ssks_passthrough_in_sol_writer():
+    """A finite source SSKS column overrides the texture-based estimate."""
+    from dssatutils import soil_soilgrids_online as sg
+    base = dict(ID="SK1", latitude=10.0, longitude=20.0, depth_bottom=15,
+                depth_center=7.5, sand=40.0, clay=20.0, silt=40.0, bdod=1.30,
+                soc_pct=1.2, cfvo=0.0, SLLL=0.10, SDUL=0.25, SSAT=0.43)
+    with tempfile.TemporaryDirectory() as work:
+        sg._format_dssat_sol_file(pd.DataFrame([{**base, "SSKS": 12.3}]), work,
+                                  source_name="Test", source_tag="ssks")
+        with_ssks = open(os.path.join(work, "SK1.SOL")).read()
+        sg._format_dssat_sol_file(pd.DataFrame([base]), work,
+                                  source_name="Test", source_tag="tex")
+        without = open(os.path.join(work, "SK1.SOL")).read()
+    assert " 12.3 " in with_ssks, "source SSKS not honored"
+    assert " 12.3 " not in without, "texture fallback should not equal source SSKS"
+
+
+def test_terraclimate_monthly_disaggregated_to_daily():
+    """A 12-month synthetic TerraClimate NetCDF expands to continuous daily rows."""
+    xr = pytest_importorskip_xarray()
+    if xr is None:
+        return
+    from dssatutils import process_weather_terraclimate
+    lat = np.array([-10.0, -11.0, -12.0])
+    lon = np.array([30.0, 31.0, 32.0])
+    times = pd.date_range("2001-01-01", periods=12, freq="MS")
+
+    def _da(value, units):
+        arr = np.full((12, 3, 3), value, dtype=float)
+        da = xr.DataArray(arr, coords={"time": times, "lat": lat, "lon": lon},
+                          dims=["time", "lat", "lon"])
+        da.attrs["units"] = units
+        return da
+
+    with tempfile.TemporaryDirectory() as work:
+        nc_dir = os.path.join(work, "nc"); os.makedirs(nc_dir)
+        _da(30.0, "degC").to_dataset(name="tmmx").to_netcdf(os.path.join(nc_dir, "TerraClimate_tmmx_2001.nc"))
+        _da(15.0, "degC").to_dataset(name="tmmn").to_netcdf(os.path.join(nc_dir, "TerraClimate_tmmn_2001.nc"))
+        _da(31.0, "mm").to_dataset(name="ppt").to_netcdf(os.path.join(nc_dir, "TerraClimate_ppt_2001.nc"))
+        out_dir = os.path.join(work, "wth")
+        log = os.path.join(work, "log.txt")
+        points = pd.DataFrame({"ID": ["TC1"], "LAT": [-11.1], "LON": [31.1]})
+        process_weather_terraclimate(points, 2001, 2001, out_dir, "ID", "LAT", "LON",
+                                     1, log, nc_dir)
+        lines = [l.rstrip("\n") for l in open(os.path.join(out_dir, "TC1.WTH")) if l.strip()]
+        data = lines[4:]
+        assert len(data) == 365, f"expected 365 continuous daily rows, got {len(data)}"
+        # Continuous DOY 1..365 with no monthly gaps.
+        doys = [int(r.split()[0][4:]) for r in data]
+        assert doys == list(range(1, 366))
+        # January precip total 31 mm spread over 31 days -> 1.0 mm/day.
+        jan = data[0].split()
+        assert abs(float(jan[4]) - 1.0) < 0.05, f"daily rain off: {jan[4]}"
+
+
+def pytest_importorskip_xarray():
+    try:
+        import xarray as xr
+        return xr
+    except Exception:
+        return None
+
+
+def test_raster_soil_texture_helper():
+    from dssatutils import soil_raster_common as s
+    sand, silt, clay = s.texture_to_pct(9)
+    assert (sand, silt, clay) == (32, 34, 34)
+
+
+def test_agmip_wrapper_maps_external_sol_profiles():
+    import dssatutils
+    master = """*AGMIP001 AgMIP test profile A
+@SITE        COUNTRY          LAT     LONG SCS FAMILY
+ SITEA       Test          10.0000  20.0000 -99
+@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI
+    15   -99 0.100 0.250 0.430 1.00  -99 1.30 1.20 22.0 38.0
+*AGMIP002 AgMIP test profile B
+@SITE        COUNTRY          LAT     LONG SCS FAMILY
+ SITEB       Test         -12.0000  35.0000 -99
+@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI
+    15   -99 0.120 0.270 0.440 1.00  -99 1.25 1.40 28.0 34.0
+"""
+    points = pd.DataFrame({"ID": ["P7"], "LAT": [-12.1], "LONG": [35.1]})
+    with tempfile.TemporaryDirectory() as work:
+        master_path = os.path.join(work, "AGMIP_TEST.SOL")
+        out_dir = os.path.join(work, "sol")
+        map_path = os.path.join(work, "soil.csv")
+        with open(master_path, "w", encoding="latin-1") as fh:
+            fh.write(master)
+        mapping = dssatutils.process_soils_agmip(points, master_path, map_path, out_dir)
+        assert mapping.loc[0, "SOURCE_SOIL_ID"] == "AGMIP002"
+        out = os.path.join(out_dir, "00000007.SOL")
+        assert os.path.exists(out)
+        text = open(out, encoding="latin-1").read()
+        assert text.startswith("*00000007")
 
 
 def test_isdasoil_back_transform_and_writer():
@@ -179,6 +325,56 @@ def test_r_python_parity_markers():
         "python/dssatutils/weather_xavier.py": ("process_weather_xavier", "XAVR", "BR-DWGD"),
         "R/weather_cmfd.R": ("process_weather_cmfd", "CMFD", "0.0864"),
         "python/dssatutils/weather_cmfd.py": ("process_weather_cmfd", "CMFD", "0.0864"),
+        "R/soil_agmip.R": ("process_soils_agmip", "AgMIP", "10.7910/DVN/1PEEY0"),
+        "python/dssatutils/soil_agmip.py": ("process_soils_agmip", "AgMIP", "10.7910/DVN/1PEEY0"),
+        "R/weather_chelsa_w5e5.R": ("process_weather_chelsa_w5e5", "CHELSA-W5E5"),
+        "python/dssatutils/weather_chelsa_w5e5.py": ("process_weather_chelsa_w5e5", "CHELSA-W5E5"),
+        "R/weather_agmip.R": ("process_weather_agmerra", "process_weather_agcfsr", "AgMERRA", "AgCFSR"),
+        "python/dssatutils/weather_agmip.py": ("process_weather_agmerra", "process_weather_agcfsr", "AgMERRA", "AgCFSR"),
+        "R/weather_silo.R": ("process_weather_silo", "SILO"),
+        "python/dssatutils/weather_silo.py": ("process_weather_silo", "SILO"),
+        "R/weather_prism.R": ("process_weather_prism", "PRISM"),
+        "python/dssatutils/weather_prism.py": ("process_weather_prism", "PRISM"),
+        "R/soil_hihydrosoil.R": ("process_soils_hihydrosoil", "HiHydroSoil"),
+        "python/dssatutils/soil_hihydrosoil.py": ("process_soils_hihydrosoil", "HiHydroSoil"),
+        "R/soil_slga.R": ("process_soils_slga", "SLGA"),
+        "python/dssatutils/soil_slga.py": ("process_soils_slga", "SLGA"),
+        "R/weather_mswx.R": ("process_weather_mswx", "MSWX"),
+        "python/dssatutils/weather_mswx.py": ("process_weather_mswx", "MSWX"),
+        "R/weather_mswep.R": ("process_weather_mswep", "MSWEP"),
+        "python/dssatutils/weather_mswep.py": ("process_weather_mswep", "MSWEP"),
+        "R/weather_crujra.R": ("process_weather_crujra", "CRU-JRA"),
+        "python/dssatutils/weather_crujra.py": ("process_weather_crujra", "CRU-JRA"),
+        "R/weather_terraclimate.R": ("process_weather_terraclimate", "TerraClimate"),
+        "python/dssatutils/weather_terraclimate.py": ("process_weather_terraclimate", "TerraClimate"),
+        "R/soil_wise30sec.R": ("process_soils_wise30sec", "WISE30sec"),
+        "python/dssatutils/soil_wise30sec.py": ("process_soils_wise30sec", "WISE30sec"),
+        "R/soil_wosis.R": ("process_soils_wosis", "WoSIS"),
+        "python/dssatutils/soil_wosis.py": ("process_soils_wosis", "WoSIS"),
+        "R/weather_aphrodite.R": ("process_weather_aphrodite", "APHRODITE"),
+        "python/dssatutils/weather_aphrodite.py": ("process_weather_aphrodite", "APHRODITE"),
+        "R/weather_anusplin.R": ("process_weather_anusplin", "ANUSPLIN"),
+        "python/dssatutils/weather_anusplin.py": ("process_weather_anusplin", "ANUSPLIN"),
+        "R/weather_tamsat.R": ("process_weather_tamsat", "TAMSAT"),
+        "python/dssatutils/weather_tamsat.py": ("process_weather_tamsat", "TAMSAT"),
+        "R/weather_ghcn.R": ("process_weather_ghcn", "GHCN"),
+        "python/dssatutils/weather_ghcn.py": ("process_weather_ghcn", "GHCN"),
+        "R/weather_pgf.R": ("process_weather_pgf", "PGF"),
+        "python/dssatutils/weather_pgf.py": ("process_weather_pgf", "PGF"),
+        "R/weather_merra2.R": ("process_weather_merra2", "MERRA-2"),
+        "python/dssatutils/weather_merra2.py": ("process_weather_merra2", "MERRA-2"),
+        "R/soil_gsde.R": ("process_soils_gsde", "GSDE"),
+        "python/dssatutils/soil_gsde.py": ("process_soils_gsde", "GSDE"),
+        "R/soil_china.R": ("process_soils_china", "BNU"),
+        "python/dssatutils/soil_china.py": ("process_soils_china", "BNU"),
+        "R/soil_febr.R": ("process_soils_febr", "FEBR"),
+        "python/dssatutils/soil_febr.py": ("process_soils_febr", "FEBR"),
+        "R/soil_slc.R": ("process_soils_slc", "Soil Landscapes of Canada"),
+        "python/dssatutils/soil_slc.py": ("process_soils_slc", "Soil Landscapes of Canada"),
+        "R/soil_esdb.R": ("process_soils_esdb", "ESDB"),
+        "python/dssatutils/soil_esdb.py": ("process_soils_esdb", "ESDB"),
+        "R/soil_openlandmap.R": ("process_soils_openlandmap", "OpenLandMap"),
+        "python/dssatutils/soil_openlandmap.py": ("process_soils_openlandmap", "OpenLandMap"),
     }
     for rel, markers in checks.items():
         src = _read(rel)

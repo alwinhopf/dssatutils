@@ -122,9 +122,15 @@ format_dssat_sol_file <- function(site_data, output_dir,
     srgf <- 1.0 * exp(-0.02 * layer$depth_center)
     if (srgf < 0.02) srgf <- 0
     
-    # Hydraulic Conductivity (Calculated)
-    # Because we validated NAs above, this calculation is now safe.
-    ssks <- 60.96 * (10^(0.0126*layer$sand - 0.0064*layer$clay - 0.6))
+    # Hydraulic Conductivity: prefer a measured/source SSKS (cm/h) when the
+    # caller supplies one (e.g. HiHydroSoil); else fall back to the texture-based
+    # Saxton-Rawls estimate. Because we validated NAs above, the fallback is safe.
+    measured_ssks <- if ("SSKS" %in% names(layer)) layer$SSKS else NA_real_
+    if (!is.na(measured_ssks) && measured_ssks > 0) {
+      ssks <- measured_ssks
+    } else {
+      ssks <- 60.96 * (10^(0.0126*layer$sand - 0.0064*layer$clay - 0.6))
+    }
     if(ssks > 999) ssks <- 999
     
     # Physics check (Ensure physics calc didn't produce NA)
