@@ -48,7 +48,7 @@ jobs:
 
       - name: Install R package dependencies
         run: |
-          Rscript -e 'install.packages(c("pkgload", "testthat", "daymetr", "nasapower", "soilDB", "sf", "terra", "ncdf4", "httr", "jsonlite", "dplyr", "tidyr", "stringr", "readr", "lubridate", "foreach", "doParallel", "pbapply", "DSSAT", "DBI", "RSQLite"))'
+          Rscript -e 'install.packages(c("pkgload", "testthat", "daymetr", "nasapower", "soilDB", "sf", "terra", "ncdf4", "httr", "jsonlite", "dplyr", "tidyr", "stringr", "readr", "lubridate", "foreach", "doParallel", "pbapply", "DSSAT", "DBI", "RSQLite", "yaml"))'
 
       - name: Run R tests
         run: |
