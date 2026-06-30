@@ -5,28 +5,18 @@
 # ==============================================================================
 
 # ==============================================================================
-#  0. MASTER CONFIGURATION
+#  0. CONFIGURATION
 # ==============================================================================
-# USE_REST_API controls the data retrieval strategy inside process_soils_soilgrids_online():
+# soil.soilgrids_online in config.yml controls the default retrieval strategy:
 #
-#   TRUE  — JSON REST API (https://rest.isric.org)
+#   use_rest_api: true   — JSON REST API (https://rest.isric.org)
 #           Best for interactive/local use; one request per point; rate-limited.
-#           Includes exponential back-off retry logic (up to 5 attempts).
 #
-#   FALSE — VRT/GDAL virtual rasters (streamed from ISRIC cloud storage)
+#   use_rest_api: false  — VRT/GDAL virtual rasters (streamed from ISRIC)
 #           Best for HPC / large batch jobs; avoids per-point HTTP overhead.
-#           Requires stable internet; benefits from GDAL block-level caching.
 #
-# This variable is consumed inside process_soils_soilgrids_online() via:
-#   use_rest <- if (exists("USE_REST_API")) USE_REST_API else TRUE
-#
-# Override from dssat_main_pipeline.R before calling the function:
-#   USE_REST_API <- TRUE    # REST API mode  (interactive / local)
-#   USE_REST_API <- FALSE   # VRT/GDAL mode  (HPC / batch)
-# NOTE: USE_REST_API default is set inside process_soils_soilgrids_online().
-# Override from the calling script before invoking the function:
-#   USE_REST_API <- TRUE    # REST API mode  (interactive / local)
-#   USE_REST_API <- FALSE   # VRT/GDAL mode  (HPC / batch)
+# A legacy global USE_REST_API is still honored for older pipeline scripts, but
+# config.yml is the package default source of truth.
 
 # ==============================================================================
 #  1. PHYSICS & CALCULATIONS (Saxton & Rawls, 2006)
@@ -160,7 +150,10 @@ format_dssat_sol_file <- function(site_data, output_dir,
 # ==============================================================================
 fetch_soilgrids_rest <- function(lat, lon) {
   
-  url <- "https://rest.isric.org/soilgrids/v2.0/properties/query"
+  url <- .dssatutils_config_get(
+    "soil.soilgrids_online.rest_url",
+    "https://rest.isric.org/soilgrids/v2.0/properties/query"
+  )
   
   # Flatten parameter list for httr
   base_params <- list(lat = lat, lon = lon, value = "mean")
@@ -172,8 +165,15 @@ fetch_soilgrids_rest <- function(lat, lon) {
   for(d in depths) query_params <- append(query_params, list(depth = d))
   
   # --- RETRY CONFIGURATION ---
-  max_retries <- 5        # How many times to retry
-  base_wait_time <- 2     # Initial wait in seconds
+  max_retries <- as.integer(.dssatutils_config_number(
+    "soil.soilgrids_online.rest_max_retries", 5
+  ))
+  base_wait_time <- .dssatutils_config_number(
+    "soil.soilgrids_online.rest_base_wait_seconds", 2
+  )
+  polite_delay <- .dssatutils_config_number(
+    "soil.soilgrids_online.rest_polite_delay_seconds", 1
+  )
   
   result <- NULL
   
@@ -181,7 +181,7 @@ fetch_soilgrids_rest <- function(lat, lon) {
     tryCatch({
       
       # Standard polite delay before request
-      Sys.sleep(1) 
+      if (polite_delay > 0) Sys.sleep(polite_delay)
       
       response <- httr::GET(url, query = query_params)
       status <- httr::status_code(response)
@@ -248,7 +248,11 @@ fetch_soilgrids_vrt <- function(gridfile, id_col) {
   depth_centers <- c(2.5, 10, 22.5, 45, 80, 150)
   depth_bottoms <- c(5, 15, 30, 60, 100, 200)
   props <- c("clay", "sand", "silt", "soc", "bdod", "cfvo")
-  sg_url <- "/vsicurl/https://files.isric.org/soilgrids/latest/data/"
+  vrt_root <- .dssatutils_config_get(
+    "soil.soilgrids_online.vrt_root",
+    "https://files.isric.org/soilgrids/latest/data/"
+  )
+  sg_url <- paste0("/vsicurl/", vrt_root)
   
   # Project to IGH
   igh_proj <- "+proj=igh +lat_0=0 +lon_0=0 +datum=WGS84 +units=m +no_defs"
@@ -287,7 +291,11 @@ fetch_soilgrids_vrt <- function(gridfile, id_col) {
 # ==============================================================================
 process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_sol_dir, id_col) {
   
-  use_rest <- if(exists("USE_REST_API", envir = globalenv())) get("USE_REST_API", envir = globalenv()) else TRUE
+  use_rest <- if(exists("USE_REST_API", envir = globalenv())) {
+    get("USE_REST_API", envir = globalenv())
+  } else {
+    .dssatutils_config_bool("soil.soilgrids_online.use_rest_api", FALSE)
+  }
   message(sprintf("--- Starting SoilGrids Extraction (Mode: %s) ---", ifelse(use_rest, "REST API", "VRT")))
   
   if (!inherits(gridfile, "sf")) stop("gridfile must be an sf object")

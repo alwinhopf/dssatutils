@@ -103,22 +103,6 @@
   min(requested_end, Sys.Date() - lag_days)
 }
 
-#' Save the CDS API token in the local keyring for ecmwfr
-#'
-#' @param token Personal API token from the CDS profile page.
-#' @param user Keyring entry name. Defaults to "ecmwfr".
-#' @export
-era5land_set_cds_key <- function(token, user = "ecmwfr") {
-  if (missing(token) || !nzchar(token)) {
-    stop("Please provide a non-empty CDS personal access token.")
-  }
-  if (!requireNamespace("ecmwfr", quietly = TRUE)) {
-    stop("Package 'ecmwfr' must be installed to configure CDS keys.")
-  }
-  ecmwfr::wf_set_key(key = token, user = user)
-  invisible(user)
-}
-
 .build_era5_land_request <- function(latitude,
                                      longitude,
                                      start_date,
@@ -349,9 +333,7 @@ process_weather_era5_land <- function(shapefile,
                                       cache_dir = file.path(output_dir, "_era5_cache"),
                                       keep_raw_downloads = FALSE,
                                       availability_lag_days = 5) {
-  if (!requireNamespace("ecmwfr", quietly = TRUE)) {
-    stop("ERA5-Land requires the 'ecmwfr' package + a Copernicus CDS key. install.packages('ecmwfr')")
-  }
+  .dssatutils_ensure_cds_credentials(user = cds_user, require_ecmwfr = TRUE)
   
   message(sprintf("--- Starting ERA5-Land Download (Years: %d-%d) ---", start_year, end_year))
 
@@ -380,7 +362,10 @@ process_weather_era5_land <- function(shapefile,
       ".find_first_matching_column", ".ensure_numeric",
       ".aggregate_era5_land_to_daily", ".fill_na_with_neighbor_mean",
       ".calc_rh_from_temp_dew", ".write_dssat_weather_file",
-      ".log_worker_message", "cds_user"
+      ".log_worker_message", ".dssatutils_cds_default_url",
+      ".dssatutils_cds_rc_candidates", ".dssatutils_read_cdsapirc",
+      ".dssatutils_prompt_secret", "setup_cds_credentials",
+      ".dssatutils_ensure_cds_credentials", "cds_user"
     ),
     envir = environment()
   )

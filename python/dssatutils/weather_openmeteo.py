@@ -25,9 +25,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import pandas as pd
 import requests
 
+from .config import get_config_number, get_config_value
+
 logger = logging.getLogger(__name__)
 
-_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+_ARCHIVE_URL = get_config_value(
+    "weather.openmeteo.archive_url",
+    "https://archive-api.open-meteo.com/v1/archive",
+)
 
 # Daily variables requested from Open-Meteo (ERA5 archive).
 _DAILY_VARS = [
@@ -56,8 +61,15 @@ def _calc_amp(df: pd.DataFrame) -> float:
 
 
 def _fetch_open_meteo(lat: float, lon: float, start: str, end: str,
-                      retries: int = 4, backoff: float = 5.0) -> pd.DataFrame:
+                      retries: int | None = None,
+                      backoff: float | None = None) -> pd.DataFrame:
     """Fetch Open-Meteo daily archive for one point. start/end: 'YYYY-MM-DD'."""
+    retries = int(retries if retries is not None else get_config_number(
+        "weather.openmeteo.fetch_retries", 4
+    ))
+    backoff = float(backoff if backoff is not None else get_config_number(
+        "weather.openmeteo.fetch_backoff_seconds", 5
+    ))
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -163,8 +175,8 @@ def process_weather_openmeteo(shapefile, start_year, end_year, output_dir,
     today = date.today()
     start_date = f"{start_year}-01-01"
     if end_year >= today.year:
-        # ERA5 archive lags ~5 days.
-        safe_end = today - timedelta(days=6)
+        archive_lag_days = int(get_config_number("weather.openmeteo.archive_lag_days", 6))
+        safe_end = today - timedelta(days=archive_lag_days)
         end_date = safe_end.isoformat()
         print(f"End year is current/future. Fetching up to: {end_date}")
     else:

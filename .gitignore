@@ -25,6 +25,7 @@ SoilGrids/
 results/
 soil_cache/
 weather_cache/
+.live_cache/
 
 # OS
 .DS_Store

@@ -133,16 +133,16 @@ test_that("gridded weather writer produces DSSAT WTH", {
     YEAR = as.integer(format(dates, "%Y")), MM = as.integer(format(dates, "%m")),
     SRAD = 18, TMAX = 25, TMIN = 12, RAIN = 2, TDEW = 9, RH2M = 70, WIND = 2)
   work <- tempfile(); dir.create(work); on.exit(unlink(work, recursive = TRUE))
-  weather_write_wth(df, "WX1", 35, -90, work, "TESTGRID", "TGRD")
+  dssatutils:::weather_write_wth(df, "WX1", 35, -90, work, "TESTGRID", "TGRD")
   txt <- readLines(file.path(work, "WX1.WTH"))
   expect_true(grepl("\\$WEATHER DATA: TESTGRID", txt[1]))
   expect_true(any(grepl("@  DATE", txt)))
-  expect_equal(weather_convert_units(300, "K", "temp"), 26.85, tolerance = 1e-6)
-  expect_equal(weather_convert_units(100, "W m-2", "srad"), 8.64, tolerance = 1e-6)
+  expect_equal(dssatutils:::weather_convert_units(300, "K", "temp"), 26.85, tolerance = 1e-6)
+  expect_equal(dssatutils:::weather_convert_units(100, "W m-2", "srad"), 8.64, tolerance = 1e-6)
 })
 
 test_that("raster soil texture helper maps USDA class", {
-  expect_equal(as.numeric(soil_texture_to_pct(9)), c(32, 34, 34))
+  expect_equal(as.numeric(dssatutils:::soil_texture_to_pct(9)), c(32, 34, 34))
 })
 
 test_that("corrupt NetCDF validators reject bogus cache files", {
@@ -150,6 +150,72 @@ test_that("corrupt NetCDF validators reject bogus cache files", {
   writeBin(charToRaw("not a netcdf"), bad)
   expect_false(dssatutils:::.gridmet_valid_netcdf(bad))
   expect_false(dssatutils:::.chirps_valid_netcdf(bad))
+  expect_false(dssatutils:::.chirps_v3_valid_netcdf(bad))
+})
+
+test_that("rainfall merge helper replaces matching dates only", {
+  df <- data.frame(DATE = c("2010001", "2010002", "2010003"),
+                   RAIN = c(1L, 1L, 1L))
+  res <- merge_rainfall_into_weather(df, c("2010002" = 9.5, "2010004" = 4.0))
+  expect_equal(res$n_replaced, 1)
+  expect_equal(res$weather_data$RAIN, c(1, 9.5, 1))
+  expect_true(is.double(res$weather_data$RAIN))
+})
+
+test_that("CDS credential setup writes temporary cdsapirc", {
+  old <- Sys.getenv(c("CDSAPI_KEY", "CDSAPI_URL", "CDSAPI_RC"), unset = NA)
+  on.exit({
+    for (nm in names(old)) {
+      if (is.na(old[[nm]])) {
+        Sys.unsetenv(nm)
+      } else {
+        do.call(Sys.setenv, stats::setNames(as.list(old[[nm]]), nm))
+      }
+    }
+  }, add = TRUE)
+  Sys.unsetenv(c("CDSAPI_KEY", "CDSAPI_URL", "CDSAPI_RC"))
+
+  work <- tempfile(); dir.create(work); on.exit(unlink(work, recursive = TRUE), add = TRUE)
+  rc <- file.path(work, ".cdsapirc")
+  meta <- setup_cds_credentials(
+    token = "dummy-token",
+    rc_path = rc,
+    overwrite = TRUE,
+    prompt = FALSE,
+    set_ecmwfr_key = FALSE,
+    quiet = TRUE
+  )
+  txt <- readLines(rc)
+  expect_true(any(grepl("url: https://cds.climate.copernicus.eu/api", txt, fixed = TRUE)))
+  expect_true(any(grepl("key: dummy-token", txt, fixed = TRUE)))
+  expect_equal(meta$path, rc)
+  expect_equal(Sys.getenv("CDSAPI_KEY"), "dummy-token")
+})
+
+test_that("CHIRPS v3 path builder supports rnl and sat", {
+  info <- dssatutils:::.chirps_v3_file_info(2010, 3, product = "rnl",
+                                            stream = "final",
+                                            fetch_mode = "monthly_netcdf")
+  expect_equal(info$fname, "chirps-v3.0.2010.03.days_p05.nc")
+  expect_true(grepl("/daily/final/rnl/netcdf/byMonth/", info$url, fixed = TRUE))
+
+  info <- dssatutils:::.chirps_v3_file_info(1998, product = "sat",
+                                            stream = "final",
+                                            fetch_mode = "yearly_netcdf")
+  expect_equal(info$fname, "chirps-v3.0.sat.1998.days_p05.nc")
+  expect_true(grepl("/daily/final/sat/netcdf/byYear/", info$url, fixed = TRUE))
+  months <- dssatutils:::.chirps_v3_months_for_range(2010, 2010, months = 3)
+  expect_equal(unname(months[1, ]), c(2010, 3))
+})
+
+test_that("CHIRPS v3 options validation supports gee and remote_cog", {
+  opt_cog <- dssatutils:::.chirps_v3_options(fetch_mode = "remote_cog")
+  expect_equal(opt_cog$fetch_mode, "remote_cog")
+
+  opt_gee <- dssatutils:::.chirps_v3_options(fetch_mode = "gee")
+  expect_equal(opt_gee$fetch_mode, "gee")
+
+  expect_error(dssatutils:::.chirps_v3_options(fetch_mode = "gee", stream = "prelim"))
 })
 
 # ===================================================================
@@ -194,7 +260,10 @@ test_that("new public entry points are exported", {
                "process_soils_slga", "process_weather_mswx",
                "process_weather_mswep", "process_weather_crujra",
                "process_weather_terraclimate", "process_soils_wise30sec",
-               "process_soils_wosis")) {
+               "process_soils_wosis",
+               "extract_chirps_v3_rainfall", "process_weather_nasapower_chirps_v3",
+               "merge_rainfall_into_weather", "setup_cds_credentials",
+               "era5land_set_cds_key")) {
     expect_true(exists(fn, where = asNamespace("dssatutils")))
   }
 })

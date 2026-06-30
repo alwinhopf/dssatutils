@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dssatutils"
-version = "0.2.0"
+version = "0.4.0"
 description = "Shared weather & soil download utilities for DSSAT gridded pipelines"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,12 +26,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# AgERA5 needs a free Copernicus CDS API key + the cdsapi client.
+# CDS-backed weather sources need a free Copernicus CDS API key + cdsapi.
+cds = ["cdsapi>=0.7"]
+# Backwards-compatible extras for source-specific installs.
 agera5 = ["cdsapi>=0.7"]
+era5 = ["cdsapi>=0.7"]
+eobs-cds = ["cdsapi>=0.7"]
 # HWSD only needs pyodbc when hwsd_db_file points at the FAO Microsoft Access
 # .mdb directly (plus the OS Microsoft Access ODBC driver). Not needed for .sqlite.
 hwsd = ["pyodbc>=4.0"]
-# Everything optional (AgERA5 + HWSD .mdb + anything added later).
+# Everything optional (CDS-backed weather + HWSD .mdb + anything added later).
 all = ["cdsapi>=0.7", "pyodbc>=4.0"]
 dev = ["pytest>=7.0"]
 
@@ -42,5 +46,11 @@ Homepage = "https://github.com/alwinhopf/dssatutils"
 [tool.setuptools.packages.find]
 where = ["python"]
 
+[tool.setuptools.package-data]
+dssatutils = ["config.yml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live: tests that download live remote data and may use hundreds of MiB of cache",
+]

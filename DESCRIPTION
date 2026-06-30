@@ -5,7 +5,7 @@ Version: 0.4.0
 Authors@R: person("Alwin", "Hopf", email = "alwinhopf@gmail.com", role = c("aut", "cre"))
 Description: Reusable functions that download weather and soil data from a range of
     public sources (Daymet, GridMET, NASA POWER, Open-Meteo, AgERA5, NASA
-    POWER + CHIRPS, DWD station data, E-OBS European grids, BR-DWGD/Xavier Brazil
+    POWER + CHIRPS v2/v3, DWD station data, E-OBS European grids, BR-DWGD/Xavier Brazil
     grids, CMFD China grids, CHELSA-W5E5, AgMERRA, AgCFSR, SILO, PRISM, MSWX,
     MSWEP, CRU-JRA, TerraClimate, APHRODITE Asia, ANUSPLIN Canada, TAMSAT Africa,
     GHCN-Daily stations, Princeton PGF, MERRA-2; SSURGO, gNATSGO, iSDAsoil Africa,
@@ -33,6 +33,7 @@ Imports:
     stringr,
     readr,
     lubridate,
+    yaml,
     foreach,
     doParallel,
     pbapply,

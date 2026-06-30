@@ -86,6 +86,14 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
         ) %>%
         # NASA-POWER uses -999 for missing values
         dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~ ifelse(. == -999, -99, .)))
+
+      weather_data <- .normalize_weather_missing_values(
+        weather_data,
+        point_id = point_id,
+        output_file = output_file,
+        output_dir = output_dir,
+        source_label = "NASA_POWER"
+      )
       
       # Calculate TAV and AMP
       weather_data$TAVG <- (weather_data$TMAX + weather_data$TMIN) / 2

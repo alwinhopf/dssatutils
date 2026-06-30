@@ -42,14 +42,30 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
     ))
     n_cores <- 1L
   }
-  request_delay <- suppressWarnings(as.numeric(Sys.getenv("OPEN_METEO_REQUEST_DELAY_SECONDS", "20")))
+  request_delay <- .dssatutils_config_number(
+    "weather.openmeteo.request_delay_seconds",
+    20
+  )
   if (is.na(request_delay) || request_delay < 0) request_delay <- 20
-  minutely_sleep <- suppressWarnings(as.numeric(Sys.getenv("OPEN_METEO_MINUTELY_LIMIT_SLEEP_SECONDS", "75")))
+  minutely_sleep <- .dssatutils_config_number(
+    "weather.openmeteo.minutely_limit_sleep_seconds",
+    75
+  )
   if (is.na(minutely_sleep) || minutely_sleep < 1) minutely_sleep <- 75
-  hourly_sleep <- suppressWarnings(as.numeric(Sys.getenv("OPEN_METEO_HOURLY_LIMIT_SLEEP_SECONDS", "3700")))
+  hourly_sleep <- .dssatutils_config_number(
+    "weather.openmeteo.hourly_limit_sleep_seconds",
+    3700
+  )
   if (is.na(hourly_sleep) || hourly_sleep < 1) hourly_sleep <- 3700
-  max_attempts <- suppressWarnings(as.integer(Sys.getenv("OPEN_METEO_MAX_ATTEMPTS", "12")))
+  max_attempts <- as.integer(.dssatutils_config_number(
+    "weather.openmeteo.max_attempts",
+    12
+  ))
   if (is.na(max_attempts) || max_attempts < 1L) max_attempts <- 12L
+  archive_url <- .dssatutils_config_get(
+    "weather.openmeteo.archive_url",
+    "https://archive-api.open-meteo.com/v1/archive"
+  )
 
   cl <- parallel::makeCluster(n_cores)
   # Safety net: release the cluster even if the download errors out before the
@@ -83,7 +99,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
       last_status <- NA_integer_
       last_reason <- NA_character_
       for (attempt in seq_len(max_attempts)) {
-        r <- httr::GET("https://archive-api.open-meteo.com/v1/archive",
+        r <- httr::GET(archive_url,
                        query = list(latitude = latitude, longitude = longitude,
                                     start_date = start_date_str, end_date = end_date_str,
                                     daily = daily_vars, windspeed_unit = "ms",

@@ -191,6 +191,60 @@ class TestComprehensive(unittest.TestCase):
         )
         self._assert_wth_valid(os.path.join(out_dir, "TEST_1.WTH"))
 
+    @patch("dssatutils.weather_chirps_v3._download_chirps_v3_file")
+    @patch("dssatutils.weather_chirps_v3._extract_chirps_v3_rain")
+    @patch("dssatutils.weather_chirps_v3._fetch_nasa_power")
+    def test_weather_nasapower_chirps_v3(self, mock_fetch_nasa, mock_extract_chirps, mock_download_chirps):
+        """NASA POWER + CHIRPS v3 hybrid: mock rnl/sat-capable rainfall layer."""
+        from dssatutils import process_weather_nasapower_chirps_v3
+
+        mock_download_chirps.return_value = "dummy_chirps_v3.nc"
+
+        dates = pd.date_range("2010-01-01", "2010-12-31", freq="D")
+        n = len(dates)
+        rain_keys = [f"{d.year}{d.day_of_year:03d}" for d in dates]
+        rain_vals = np.linspace(1.0, 12.0, n)
+        mock_extract_chirps.return_value = {
+            "TEST_1": pd.Series(dict(zip(rain_keys, rain_vals)))
+        }
+
+        mock_df = pd.DataFrame({
+            "YEAR": dates.year,
+            "MM": dates.month,
+            "DOY": dates.day_of_year,
+            "DATE": [f"{d.year}{d.day_of_year:03d}" for d in dates],
+            "TMAX": np.random.uniform(20, 35, n),
+            "TMIN": np.random.uniform(5, 15, n),
+            "SRAD": np.random.uniform(10, 25, n),
+            "RAIN": np.zeros(n),
+            "TDEW": np.random.uniform(5, 15, n),
+            "RH2M": np.random.uniform(50, 90, n),
+            "WIND": np.random.uniform(1, 5, n),
+        })
+        mock_fetch_nasa.return_value = mock_df
+
+        out_dir = os.path.join(self.work, "chirps_v3")
+        process_weather_nasapower_chirps_v3(
+            shapefile=self.shapefile,
+            start_year=2010,
+            end_year=2010,
+            output_dir=out_dir,
+            id_col="ID",
+            lat_col="LAT",
+            lon_col="LONG",
+            n_cores=1,
+            log_file=os.path.join(self.work, "error.log"),
+            chirps_cache_dir=os.path.join(self.work, "chirps_v3_cache"),
+            chirps_product="sat",
+            chirps_stream="final",
+        )
+        path = os.path.join(out_dir, "TEST_1.WTH")
+        self._assert_wth_valid(path)
+        with open(path) as fh:
+            txt = fh.read()
+        self.assertIn("CHIRPS-v3 final/sat", txt)
+        self.assertIn("NCV3", txt)
+
     @patch("dssatutils.weather_daymet._download_daymet")
     @patch("dssatutils.weather_daymet.ProcessPoolExecutor")
     def test_weather_daymet(self, mock_pool_cls, mock_download):

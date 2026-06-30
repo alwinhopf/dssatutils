@@ -38,10 +38,10 @@ from .weather_nasapower import _fetch_nasa_power, _calc_tav, _calc_amp
 
 logger = logging.getLogger(__name__)
 
-# CHIRPS spatial resolution: "p05" (~0.05°, ~5.5 km — recommended) or
-# "p25" (~0.25°, ~28 km — lighter download, coarser). Overridable from the
+# CHIRPS spatial resolution: "p25" (~0.25°, ~28 km, default/light download) or
+# "p05" (~0.05°, ~5.5 km, much larger download). Overridable from the
 # pipeline before calling the entry point.
-CHIRPS_RESOLUTION: str = "p05"
+CHIRPS_RESOLUTION: str = "p25"
 
 # CHIRPS covers 50°S–50°N only; outside this band fall back to NASA POWER rain.
 _CHIRPS_LAT_LIMIT = 50.0

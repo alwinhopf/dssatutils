@@ -33,7 +33,7 @@
   })
 }
 
-.download_valid_chirps <- function(url, dest) {
+.download_valid_chirps <- function(url, dest, timeout = NULL) {
   if (file.exists(dest) && .chirps_valid_netcdf(dest)) return(TRUE)
   if (file.exists(dest)) {
     message(sprintf("  Removing corrupt cached CHIRPS file: %s", basename(dest)))
@@ -41,6 +41,10 @@
   }
   tmp <- paste0(dest, ".part-", Sys.getpid())
   unlink(tmp)
+  old_timeout <- getOption("timeout")
+  chirps_timeout <- .get_chirps_download_timeout(timeout, default_val = 3600)
+  options(timeout = max(chirps_timeout, old_timeout))
+  on.exit(options(timeout = old_timeout), add = TRUE)
   ok <- tryCatch({
     utils::download.file(url, tmp, mode = "wb", quiet = TRUE)
     TRUE
@@ -57,7 +61,8 @@
 
 process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
                                              output_dir, id_col, lat_col, lon_col,
-                                             n_cores, log_file, chirps_cache_dir) {
+                                             n_cores, log_file, chirps_cache_dir,
+                                             timeout = NULL) {
 
   res <- if (exists("CHIRPS_RESOLUTION")) CHIRPS_RESOLUTION else "p05"
   chirps_lat_limit <- 50.0
@@ -97,7 +102,7 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
       if (!file.exists(dest) || !.chirps_valid_netcdf(dest)) {
         url <- sprintf("%s/%s/%s", base_url, res, fname)
         message(sprintf("  Downloading CHIRPS %d (%s)... (large; cached after first run)", yr, res))
-        .download_valid_chirps(url, dest)
+        .download_valid_chirps(url, dest, timeout = timeout)
       }
       if (!file.exists(dest) || !.chirps_valid_netcdf(dest)) next
       tryCatch({

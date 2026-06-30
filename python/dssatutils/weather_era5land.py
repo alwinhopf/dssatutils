@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 
+from .credentials import make_cds_client
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -104,7 +106,7 @@ def _download_era5_land_point_csv(latitude, longitude, start_date_str, end_date_
         import cdsapi  # imported lazily
     except ImportError as exc:
         raise ImportError("ERA5-Land requires the 'cdsapi' Python package.") from exc
-    c = cdsapi.Client()
+    c = make_cds_client(cdsapi)
 
     req = {
         'variable': [

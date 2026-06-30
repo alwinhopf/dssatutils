@@ -42,9 +42,60 @@ def test_new_modules_import_and_export():
                  "process_weather_aphrodite", "process_weather_anusplin",
                  "process_weather_tamsat", "process_weather_ghcn",
                  "process_weather_pgf", "process_weather_merra2",
+                 "extract_chirps_v3_rainfall", "process_weather_nasapower_chirps_v3",
+                 "merge_rainfall_into_weather", "setup_cds_credentials",
+                 "era5land_set_cds_key",
                  "process_soils_gsde", "process_soils_china", "process_soils_febr",
                  "process_soils_slc", "process_soils_esdb", "process_soils_openlandmap"):
         assert hasattr(dssatutils, name), f"dssatutils missing public {name}"
+
+
+def test_setup_cds_credentials_writes_temp_cdsapirc():
+    from dssatutils import setup_cds_credentials
+    old_env = {k: os.environ.get(k) for k in ("CDSAPI_KEY", "CDSAPI_URL", "CDSAPI_RC")}
+    try:
+        for key in old_env:
+            os.environ.pop(key, None)
+        with tempfile.TemporaryDirectory() as work:
+            rc = os.path.join(work, ".cdsapirc")
+            meta = setup_cds_credentials(token="dummy-token", rc_path=rc, overwrite=True, prompt=False)
+            text = open(rc, encoding="utf-8").read()
+            assert "url: https://cds.climate.copernicus.eu/api" in text
+            assert "key: dummy-token" in text
+            assert meta["path"] == rc
+            assert os.environ["CDSAPI_KEY"] == "dummy-token"
+    finally:
+        for key, value in old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_rainfall_merge_helper_replaces_matching_dates_only():
+    from dssatutils.weather_rainfall_merge import merge_rainfall_into_weather
+    df = pd.DataFrame({"DATE": ["2010001", "2010002", "2010003"], "RAIN": [1, 1, 1]})
+    n = merge_rainfall_into_weather(df, {"2010002": 9.5, "2010004": 4.0})
+    assert n == 1
+    assert df["RAIN"].tolist() == [1.0, 9.5, 1.0]
+    assert str(df["RAIN"].dtype) == "float64"
+
+
+def test_chirps_v3_path_builder_for_rnl_sat_and_prelim():
+    from dssatutils.weather_chirps_v3 import _chirps_v3_file_info, _months_for_range
+    fname, url = _chirps_v3_file_info(2010, 3, product="rnl", stream="final",
+                                      fetch_mode="monthly_netcdf")
+    assert fname == "chirps-v3.0.2010.03.days_p05.nc"
+    assert "/daily/final/rnl/netcdf/byMonth/" in url
+    fname, url = _chirps_v3_file_info(1998, product="sat", stream="final",
+                                      fetch_mode="yearly_netcdf")
+    assert fname == "chirps-v3.0.sat.1998.days_p05.nc"
+    assert "/daily/final/sat/netcdf/byYear/" in url
+    fname, url = _chirps_v3_file_info(2026, product="sat", stream="prelim",
+                                      fetch_mode="yearly_netcdf")
+    assert fname == "chirps-v3.0.sat.2026.days_p05.nc"
+    assert "/daily/prelim/sat/netcdf/byYear/" in url
+    assert _months_for_range(2010, 2010, months=[3]) == [(2010, 3)]
 
 
 def test_gridded_weather_writer_and_unit_helpers():
@@ -76,12 +127,14 @@ def test_convert_units_wind_and_vapour_pressure():
 def test_corrupt_netcdf_validators_reject_bogus_cache_files():
     from dssatutils.weather_gridmet import _validate_gridmet_nc
     from dssatutils.weather_nasapower_chirps import _validate_chirps_nc
+    from dssatutils.weather_chirps_v3 import _validate_chirps_v3_nc
     with tempfile.TemporaryDirectory() as work:
         bogus = os.path.join(work, "bad.nc")
         with open(bogus, "wb") as fh:
             fh.write(b"not a netcdf")
         assert not _validate_gridmet_nc(bogus, "tmmn")
         assert not _validate_chirps_nc(bogus)
+        assert not _validate_chirps_v3_nc(bogus)
 
 
 def test_ssks_passthrough_in_sol_writer():
@@ -363,6 +416,10 @@ def test_r_python_parity_markers():
         "python/dssatutils/weather_pgf.py": ("process_weather_pgf", "PGF"),
         "R/weather_merra2.R": ("process_weather_merra2", "MERRA-2"),
         "python/dssatutils/weather_merra2.py": ("process_weather_merra2", "MERRA-2"),
+        "R/weather_rainfall_merge.R": ("merge_rainfall_into_weather", "n_replaced"),
+        "python/dssatutils/weather_rainfall_merge.py": ("merge_rainfall_into_weather", "date_col", "rain_col"),
+        "R/weather_chirps_v3.R": ("extract_chirps_v3_rainfall", "process_weather_nasapower_chirps_v3", "rnl", "sat"),
+        "python/dssatutils/weather_chirps_v3.py": ("extract_chirps_v3_rainfall", "process_weather_nasapower_chirps_v3", "rnl", "sat"),
         "R/soil_gsde.R": ("process_soils_gsde", "GSDE"),
         "python/dssatutils/soil_gsde.py": ("process_soils_gsde", "GSDE"),
         "R/soil_china.R": ("process_soils_china", "BNU"),

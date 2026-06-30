@@ -1,0 +1,38 @@
+# Package-level defaults for dssatutils.
+#
+# Callers may override these values explicitly in function arguments or by
+# setting DSSATUTILS_CONFIG to another config.yml path. Consumer pipeline
+# config.yml files remain the study-level source of truth.
+
+cds:
+  default_url: "https://cds.climate.copernicus.eu/api"
+
+weather:
+  openmeteo:
+    archive_url: "https://archive-api.open-meteo.com/v1/archive"
+    archive_lag_days: 6
+    request_delay_seconds: 20
+    minutely_limit_sleep_seconds: 75
+    hourly_limit_sleep_seconds: 3700
+    max_attempts: 12
+    fetch_retries: 4
+    fetch_backoff_seconds: 5
+  chirps_v3:
+    product: "rnl"
+    stream: "final"
+    fetch_mode: "monthly_netcdf"
+    resolution: "p05"
+    base_url: "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily"
+    latitude_limit: 60
+    nodata: -9999
+    download_timeout_seconds: 14400
+    gee_project: ""
+
+soil:
+  soilgrids_online:
+    use_rest_api: false
+    rest_url: "https://rest.isric.org/soilgrids/v2.0/properties/query"
+    vrt_root: "https://files.isric.org/soilgrids/latest/data/"
+    rest_max_retries: 5
+    rest_base_wait_seconds: 2
+    rest_polite_delay_seconds: 1

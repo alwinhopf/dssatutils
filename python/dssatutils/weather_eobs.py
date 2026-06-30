@@ -34,6 +34,8 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from .credentials import make_cds_client
+
 # DSSAT var -> (E-OBS variable name, filename token used to locate the file).
 _EOBS_VARS = {
     "TMAX": "tx",
@@ -111,7 +113,7 @@ def _download_eobs_cds(token: str, year_start: int, year_end: int, area,
         "area": list(area),  # N, W, S, E
     }
     try:
-        cdsapi.Client().retrieve(_CDS_DATASET, req, dest)
+        make_cds_client(cdsapi).retrieve(_CDS_DATASET, req, dest)
         return dest if os.path.exists(dest) else None
     except Exception as exc:  # noqa: BLE001
         print(f"  E-OBS CDS download failed ({token}): {exc}")

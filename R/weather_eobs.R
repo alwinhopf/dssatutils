@@ -14,8 +14,7 @@
 #       files (www.ecad.eu/download/ensembles/download.php).
 #   (B) CDS (optional, eobs_use_cds=TRUE): area/time subset via the Copernicus
 #       CDS dataset "insitu-gridded-observations-europe" (needs ~/.cdsapirc, like
-#       AgERA5). Requires the python `cdsapi` via reticulate, so the default LOCAL
-#       path keeps R dependency-light.
+#       AgERA5). Uses ecmwfr and the shared setup_cds_credentials() helper.
 #
 # The NetCDF extraction (.eobs_extract_points) and .WTH writer (.eobs_write_wth)
 # are isolated from any network/credential dependency and unit-testable.
@@ -40,6 +39,46 @@ EOBS_VARS <- c(TMAX = "tx", TMIN = "tn", TMEAN = "tg", RAIN = "rr",
                grepl(paste0("_", token, "_"), base) |
                grepl(paste0(token, "_ens"), base)]
   if (length(hit)) hit[1] else NA_character_
+}
+
+.eobs_download_cds <- function(token, year_start, year_end, area, cache_dir,
+                               cds_user = "ecmwfr") {
+  dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+  dest <- file.path(cache_dir, sprintf("eobs_%s_%d_%d.nc", token, year_start, year_end))
+  if (file.exists(dest) && file.info(dest)$size > 0) return(dest)
+
+  .dssatutils_ensure_cds_credentials(user = cds_user, require_ecmwfr = TRUE)
+  name_map <- c(
+    tx = "maximum_temperature",
+    tn = "minimum_temperature",
+    tg = "mean_temperature",
+    rr = "precipitation_amount",
+    qq = "surface_shortwave_downwelling_radiation",
+    fg = "wind_speed",
+    hu = "relative_humidity"
+  )
+  req <- list(
+    dataset_short_name = "insitu-gridded-observations-europe",
+    product_type = "ensemble_mean",
+    variable = unname(if (token %in% names(name_map)) name_map[[token]] else token),
+    grid_resolution = "0.1deg",
+    period = "full_period",
+    version = "30.0e",
+    format = "netcdf",
+    area = as.numeric(area),
+    target = basename(dest)
+  )
+
+  err <- NULL
+  tryCatch(
+    ecmwfr::wf_request(request = req, user = cds_user, transfer = TRUE,
+                       path = cache_dir, verbose = FALSE),
+    error = function(e) err <<- conditionMessage(e)
+  )
+  if (file.exists(dest) && file.info(dest)$size > 0) return(dest)
+  message(sprintf("  E-OBS CDS download failed (%s): %s",
+                  token, if (is.null(err)) "no data file returned" else err))
+  NA_character_
 }
 
 
@@ -96,24 +135,31 @@ process_weather_eobs <- function(shapefile, start_year, end_year, output_dir,
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   end_year <- min(end_year, as.integer(format(Sys.Date(), "%Y")))
 
-  pts <- sf::st_transform(shapefile, 4326)
-  ids <- as.character(sf::st_drop_geometry(pts)[[id_col]])
-  xy <- sf::st_coordinates(pts)
-  lats <- xy[, 2]; lons <- xy[, 1]
-  pts_vect <- terra::vect(pts)
+  coords <- .extract_coords(shapefile, id_col, lat_col, lon_col)
+  ids <- coords$ids
+  lats <- coords$lats
+  lons <- coords$lons
+  pts_vect <- terra::vect(data.frame(lon = lons, lat = lats),
+                          geom = c("lon", "lat"), crs = "EPSG:4326")
 
   message(sprintf("--- Starting E-OBS Processing (Years: %d-%d) ---", start_year, end_year))
 
   if (isTRUE(eobs_use_cds)) {
-    stop("E-OBS CDS mode in R requires reticulate + cdsapi; use eobs_nc_dir with ",
-         "pre-downloaded NetCDF files, or fetch the subset in Python.")
+    if (!nzchar(eobs_cache_dir)) eobs_cache_dir <- file.path(output_dir, "eobs_cache")
+    pad <- 0.2
+    area <- c(max(lats) + pad, min(lons) - pad, min(lats) - pad, max(lons) + pad)
+    message("  E-OBS via Copernicus CDS (requires a configured CDS token).")
+    var_paths <- vapply(EOBS_VARS, function(tok) {
+      .eobs_download_cds(tok, start_year, end_year, area, eobs_cache_dir)
+    }, character(1))
+    names(var_paths) <- names(EOBS_VARS)
+  } else {
+    if (!nzchar(eobs_nc_dir) || !dir.exists(eobs_nc_dir))
+      stop("E-OBS local mode needs eobs_nc_dir pointing at a folder of E-OBS NetCDF ",
+           "files (tx/tn/rr/qq...). Download from www.ecad.eu.")
+    var_paths <- vapply(EOBS_VARS, function(tok) .eobs_find_var_file(eobs_nc_dir, tok), character(1))
+    names(var_paths) <- names(EOBS_VARS)
   }
-  if (!nzchar(eobs_nc_dir) || !dir.exists(eobs_nc_dir))
-    stop("E-OBS local mode needs eobs_nc_dir pointing at a folder of E-OBS NetCDF ",
-         "files (tx/tn/rr/qq...). Download from www.ecad.eu.")
-
-  var_paths <- vapply(EOBS_VARS, function(tok) .eobs_find_var_file(eobs_nc_dir, tok), character(1))
-  names(var_paths) <- names(EOBS_VARS)
   if (is.na(var_paths[["TMAX"]]) || is.na(var_paths[["TMIN"]]))
     stop("E-OBS requires at least tx (TMAX) and tn (TMIN) NetCDF files.")
 

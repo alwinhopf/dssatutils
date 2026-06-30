@@ -9,7 +9,8 @@
 #
 # ACCESS (requires a free key, NOT keyless):
 #   1. Register at the Copernicus CDS: https://cds.climate.copernicus.eu/
-#   2. Store your key (ecmwfr::wf_set_key) or via ~/.cdsapirc.
+#   2. Store your key with ecmwfr::wf_set_key(), or provide a Python-style
+#      .cdsapirc and this module will import it into ecmwfr's keyring entry.
 #   3. install.packages(c("ecmwfr","terra"))
 #   Dataset: "sis-agrometeorological-indicators"
 #
@@ -33,6 +34,20 @@
   WIND = list(var = "10m_wind_speed",          sel_kind = "statistic", sel = "24_hour_mean")      # m/s
 )
 
+.agera5_timeseries_vars <- list(
+  TMAX = list(var = "2m_temperature_24_hour_maximum", col = "Temperature_Air_2m_Max_24h"),
+  TMIN = list(var = "2m_temperature_24_hour_minimum", col = "Temperature_Air_2m_Min_24h"),
+  SRAD = list(var = "solar_radiation_flux", col = "Solar_Radiation_Flux"),
+  RAIN = list(var = "precipitation_flux", col = "Precipitation_Flux"),
+  TDEW = list(var = "2m_dewpoint_temperature_24_hour_mean", col = "Dew_Point_Temperature_2m_Mean_24h"),
+  RH2M = list(var = "2m_relative_humidity_at_15_00", col = "Relative_Humidity_2m_15h"),
+  WIND = list(var = "10m_wind_speed_24_hour_mean", col = "Wind_Speed_10m_Mean_24h")
+)
+
+AGERA5_TIMESERIES_MAX_EXTENT_DEG <- 5.0
+AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG <- 4.5
+AGERA5_TIMESERIES_PAD_DEG <- 0.2
+
 .agera5_data_files <- function(nc_path, zip_path, unzip_dir) {
   if (file.exists(nc_path)) return(nc_path)
 
@@ -51,6 +66,26 @@
 }
 
 AGERA5_CDS_REQUEST_CAP <- 4L
+
+.agera5_cds_rc_candidates <- function() {
+  .dssatutils_cds_rc_candidates()
+}
+
+.agera5_read_cdsapirc <- function(paths = .agera5_cds_rc_candidates()) {
+  rc <- .dssatutils_read_cdsapirc(paths)
+  if (is.null(rc)) return(NULL)
+  list(token = rc$key, url = rc$url, path = rc$path)
+}
+
+.agera5_ensure_ecmwfr_key <- function(user = "ecmwfr", quiet = FALSE) {
+  .dssatutils_ensure_cds_credentials(
+    user = user,
+    prompt = interactive(),
+    quiet = quiet,
+    require_ecmwfr = TRUE
+  )
+  invisible(TRUE)
+}
 
 .agera5_job <- function(vname, yr, spec, area, agera5_cache_dir) {
   tag <- sprintf("%s_%s_%d", spec$var, ifelse(is.na(spec$sel), "na", spec$sel), yr)
@@ -73,6 +108,8 @@ AGERA5_CDS_REQUEST_CAP <- 4L
     return(list(ok = TRUE, cached = TRUE, job = job, data_files = data_files,
                 message = sprintf("  AgERA5 cache hit (%s)", job$tag)))
   }
+
+  .agera5_ensure_ecmwfr_key(quiet = TRUE)
 
   req <- list(dataset_short_name = "sis-agrometeorological-indicators",
               variable = job$spec$var, year = as.character(job$yr),
@@ -102,6 +139,7 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
                                    agera5_cache_dir) {
   if (!requireNamespace("ecmwfr", quietly = TRUE))
     stop("AgERA5 needs the 'ecmwfr' package + a Copernicus CDS key. install.packages('ecmwfr')")
+  .agera5_ensure_ecmwfr_key()
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
   if (!dir.exists(agera5_cache_dir)) dir.create(agera5_cache_dir, recursive = TRUE)
 
@@ -148,7 +186,11 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
     on.exit(parallel::stopCluster(cl), add = TRUE)
     parallel::clusterExport(
       cl,
-      c(".agera5_data_files", ".agera5_download_job"),
+      c(".agera5_data_files", ".agera5_download_job", ".agera5_cds_rc_candidates",
+        ".agera5_read_cdsapirc", ".agera5_ensure_ecmwfr_key",
+        ".dssatutils_cds_default_url", ".dssatutils_cds_rc_candidates",
+        ".dssatutils_read_cdsapirc", ".dssatutils_prompt_secret",
+        "setup_cds_credentials", ".dssatutils_ensure_cds_credentials"),
       envir = parent.env(environment())
     )
     parallel::clusterEvalQ(cl, { library(ecmwfr); NULL })

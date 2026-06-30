@@ -19,13 +19,20 @@ import numpy as np
 import pandas as pd
 import requests
 
-# USE_REST_API = True   → JSON REST API (interactive / local; rate-limited)
-# USE_REST_API = False  → VRT/GDAL virtual rasters (HPC / batch)
-# Can be overridden from dssat_main_pipeline.py before calling the function.
-USE_REST_API: bool = False
+from .config import get_config_bool, get_config_number, get_config_value
 
-_ISRIC_REST_URL = "https://rest.isric.org/soilgrids/v2.0/properties/query"
-_ISRIC_VRT_ROOT = "https://files.isric.org/soilgrids/latest/data/"
+# Legacy override for older pipeline scripts. When left as None, config.yml is
+# the default source of truth.
+USE_REST_API: bool | None = None
+
+_ISRIC_REST_URL = get_config_value(
+    "soil.soilgrids_online.rest_url",
+    "https://rest.isric.org/soilgrids/v2.0/properties/query",
+)
+_ISRIC_VRT_ROOT = get_config_value(
+    "soil.soilgrids_online.vrt_root",
+    "https://files.isric.org/soilgrids/latest/data/",
+)
 
 _PROPS  = ["clay", "sand", "silt", "soc", "bdod", "cfvo"]
 _DEPTHS = ["0-5cm", "5-15cm", "15-30cm", "30-60cm", "60-100cm", "100-200cm"]
@@ -149,7 +156,8 @@ def _format_dssat_sol_file(site_data: pd.DataFrame, output_dir: str,
 # ---------------------------------------------------------------------------
 
 def _fetch_soilgrids_rest(lat: float, lon: float,
-                           max_retries: int = 5, base_wait: float = 2.0
+                           max_retries: int | None = None,
+                           base_wait: float | None = None,
                            ) -> Optional[pd.DataFrame]:
     """
     Fetch SoilGrids mean values for one point via the REST API.
@@ -164,9 +172,20 @@ def _fetch_soilgrids_rest(lat: float, lon: float,
     for d in _DEPTHS:
         params.append(("depth", d))
 
+    max_retries = int(max_retries if max_retries is not None else get_config_number(
+        "soil.soilgrids_online.rest_max_retries", 5
+    ))
+    base_wait = float(base_wait if base_wait is not None else get_config_number(
+        "soil.soilgrids_online.rest_base_wait_seconds", 2
+    ))
+    polite_delay = get_config_number(
+        "soil.soilgrids_online.rest_polite_delay_seconds", 1
+    )
+
     for attempt in range(max_retries):
         try:
-            time.sleep(1)  # polite delay
+            if polite_delay > 0:
+                time.sleep(polite_delay)
             r = requests.get(_ISRIC_REST_URL, params=params, timeout=90)
             status = r.status_code
 
@@ -293,11 +312,15 @@ def process_soils_soilgrids_online(
     Fetch SoilGrids data, compute DSSAT soil physics, write per-point .SOL
     files and a mapping CSV.  Mirrors ``process_soils_soilgrids_online`` in R.
 
-    The global variable ``USE_REST_API`` (default False) switches between:
+    ``soil.soilgrids_online.use_rest_api`` in config.yml switches between:
       True  → JSON REST API (one request per point; rate-limited)
       False → VRT/GDAL virtual rasters (batch-friendly; requires GDAL)
     """
-    use_rest = USE_REST_API
+    use_rest = (
+        USE_REST_API
+        if USE_REST_API is not None
+        else get_config_bool("soil.soilgrids_online.use_rest_api", False)
+    )
     mode = "REST API" if use_rest else "VRT"
     print(f"--- Starting SoilGrids Extraction (Mode: {mode}) ---")
 

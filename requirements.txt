@@ -25,7 +25,8 @@ PyYAML==6.0.1           # unified config.yml loader
 
 # --- Optional (only for specific sources) ---
 # rasterio (above) also powers SoilGrids VRT mode and HWSD raster sampling.
-# cdsapi is ONLY needed for the AGERA5 weather source (Copernicus CDS key req'd):
+# cdsapi is needed for CDS-backed weather sources (AgERA5, ERA5-Land,
+# optional E-OBS CDS mode; Copernicus CDS key req'd):
 #   pip install cdsapi
 # cdsapi==0.7.3
 # HWSD soil reads an SQLite DB via Python's stdlib sqlite3 (no extra pip dep).
