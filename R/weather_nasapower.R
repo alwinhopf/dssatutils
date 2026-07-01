@@ -19,12 +19,24 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     end_date_str <- paste0(end_year, "-12-31")
   }
 
-  cl <- parallel::makeCluster(n_cores)
-  # Safety net: release the cluster even if the download errors out before the
-  # explicit stopCluster() below. try() keeps it harmless on the normal path.
-  on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
-  doParallel::registerDoParallel(cl)
-  message(sprintf("Registered %d cores for parallel NASA-POWER download.", n_cores))
+  n_cores <- as.integer(n_cores)
+  if (is.na(n_cores) || n_cores < 1) {
+    stop("n_cores must be a positive integer.")
+  }
+
+  if (n_cores == 1) {
+    # Keep single-core runs in the current R process so local mocks and test
+    # fixtures are visible. This also avoids unnecessary worker startup.
+    foreach::registerDoSEQ()
+    message("Registered sequential backend for NASA-POWER download.")
+  } else {
+    cl <- parallel::makeCluster(n_cores)
+    # Safety net: release the cluster even if the download errors out before the
+    # explicit stopCluster() below. try() keeps it harmless on the normal path.
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+    doParallel::registerDoParallel(cl)
+    message(sprintf("Registered %d cores for parallel NASA-POWER download.", n_cores))
+  }
   
   # Extract coordinates and IDs robustly
   coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
@@ -145,7 +157,9 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     
   }  # End foreach loop
   
-  parallel::stopCluster(cl)
+  if (exists("cl", inherits = FALSE)) {
+    parallel::stopCluster(cl)
+  }
   message(sprintf("\nNASA-POWER processing complete. Check the '%s' directory.\n", output_dir))
   
 }

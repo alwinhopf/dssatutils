@@ -504,10 +504,10 @@ test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
   attr(shapefile, "sf_column") <- "geometry"
   
   local_mocked_bindings(
-    robust_SDA_spatialQuery = function(point_sf, what, ...) {
+    robust_SDA_spatialQuery_alderman = function(point_sf, what, ...) {
       data.frame(mukey = "12345")
     },
-    robust_SDA_query = function(query, ...) {
+    robust_SDA_query_alderman = function(query, ...) {
       if (grepl("muaggatt", query)) {
         data.frame(mukey = "12345", brockdepmin = 200.0)
       } else if (grepl("component", query)) {

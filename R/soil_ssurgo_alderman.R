@@ -1048,6 +1048,11 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
   message("Starting SSURGO Processing (dominant component/measured tension fallbacks)...")
   soil_helper_log(log_file, "INFO", "SSURGO_MAIN", "Starting SSURGO Processing (dominant component/measured tension fallbacks)")
 
+  n_cores <- as.integer(n_cores)
+  if (is.na(n_cores) || n_cores < 1) {
+    stop("n_cores must be a positive integer.")
+  }
+
   grid_df <- grid_points %>% sf::st_drop_geometry() %>% as.data.frame()
   if (!lat_col %in% names(grid_df)) grid_df[[lat_col]] <- sf::st_coordinates(grid_points)[, 2]
   if (!long_col %in% names(grid_df)) grid_df[[long_col]] <- sf::st_coordinates(grid_points)[, 1]
@@ -1116,8 +1121,8 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
   soil_helper_log(log_file, "INFO", "SSURGO_MAIN", sprintf("Processing %d points in %d chunks.", total_points, num_chunks))
 
   all_metadata <- list()
-  if (.Platform$OS.type == "windows") {
-    cl <- parallel::makeCluster(max(1, n_cores))
+  if (.Platform$OS.type == "windows" && n_cores > 1) {
+    cl <- parallel::makeCluster(n_cores)
     on.exit(parallel::stopCluster(cl), add = TRUE)
     parallel::clusterEvalQ(cl, suppressPackageStartupMessages({library(soilDB); library(sf); library(dplyr); library(tidyr); library(stringr); library(readr)}))
     parallel::clusterExport(cl,
@@ -1138,8 +1143,12 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
                     "soil_names", "STATSGO", "standardize_layers"
                   ),
                   envir = environment())
-  } else {
+  } else if (n_cores > 1) {
     cl <- max(1, n_cores)
+  } else {
+    # Keep single-core runs in-process so local mocks and lightweight tests do
+    # not fall through to live SDA requests in a worker process.
+    cl <- NULL
   }
 
   for (i in seq_len(num_chunks)) {

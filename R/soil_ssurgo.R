@@ -113,6 +113,11 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
                                  id_col, lat_col, long_col, format_sql_func) {
   
   message("Starting SSURGO Processing (Smart Resume Mode)...")
+
+  n_cores <- as.integer(n_cores)
+  if (is.na(n_cores) || n_cores < 1) {
+    stop("n_cores must be a positive integer.")
+  }
   
   # --- 1. FILTER: Identify Missing Points BEFORE Loop ---
   # Convert sf to standard dataframe to avoid geometry overhead during filtering
@@ -277,7 +282,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   message(sprintf("Processing batch of %d points in %d chunks...", total_points, num_chunks))
   
   # --- 1. SETUP CLUSTER (Done ONCE, outside the loop) ---
-  if (.Platform$OS.type == "windows") {
+  if (.Platform$OS.type == "windows" && n_cores > 1) {
     message(sprintf("Initializing cluster with %d cores...", n_cores))
     cl <- parallel::makeCluster(n_cores)
     # Safety net: release the cluster even if processing errors out before the
@@ -289,8 +294,12 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
                                 "format_dssat_soil_single", "output_dir_individual", 
                                 "id_col", "lat_col", "long_col", "format_sql_func"), 
                   envir = environment())
-  } else {
+  } else if (n_cores > 1) {
     cl <- n_cores 
+  } else {
+    # Keep single-core runs in-process so local mocks and lightweight tests do
+    # not fall through to live SDA requests in a worker process.
+    cl <- NULL
   }
   
   # --- 2. CHUNKED LOOP ---
@@ -349,7 +358,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   }
 
   # --- 3. CLEANUP ---
-  if (.Platform$OS.type == "windows") {
+  if (.Platform$OS.type == "windows" && !is.null(cl)) {
     parallel::stopCluster(cl)
   }
 
