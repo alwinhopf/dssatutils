@@ -12,6 +12,7 @@
 import gc
 import math
 import os
+import threading
 from datetime import date, timedelta
 
 import numpy as np
@@ -34,6 +35,11 @@ _GRIDMET_VARS = {
 }
 
 _GRIDMET_BASE_URL = "http://www.northwestknowledge.net/metdata/data/"
+
+# The netCDF4/HDF5 stack used by xarray is not safe to open/read from multiple
+# Python threads in all CI environments. Serialize validation reads while still
+# allowing downloads themselves to overlap.
+_GRIDMET_NETCDF_LOCK = threading.RLock()
 
 
 def _calc_tav(tmax_arr: np.ndarray, tmin_arr: np.ndarray,
@@ -63,18 +69,19 @@ def _validate_gridmet_nc(path: str, abbrev: str) -> bool:
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return False
     try:
-        with xr.open_dataset(path) as ds:
-            var_key = abbrev if abbrev in ds else (list(ds.data_vars)[0] if ds.data_vars else None)
-            if var_key is None or not ds[var_key].dims:
-                return False
-            time_dim = ds[var_key].dims[0]
-            if time_dim not in ("time", "day"):
-                return False
-            if ds.sizes.get(time_dim, 0) < 1:
-                return False
-            sample = ds[var_key].isel({time_dim: 0}).load()
-            if sample.size == 0:
-                return False
+        with _GRIDMET_NETCDF_LOCK:
+            with xr.open_dataset(path) as ds:
+                var_key = abbrev if abbrev in ds else (list(ds.data_vars)[0] if ds.data_vars else None)
+                if var_key is None or not ds[var_key].dims:
+                    return False
+                time_dim = ds[var_key].dims[0]
+                if time_dim not in ("time", "day"):
+                    return False
+                if ds.sizes.get(time_dim, 0) < 1:
+                    return False
+                sample = ds[var_key].isel({time_dim: 0}).load()
+                if sample.size == 0:
+                    return False
         return True
     except Exception as exc:  # noqa: BLE001
         print(f"  Invalid/corrupt NetCDF cache file {os.path.basename(path)}: {exc}")
@@ -148,7 +155,7 @@ def process_weather_gridmet(
     id_col: str,
     lat_col: str,
     lon_col: str,
-    n_cores: int,            # kept for API compatibility; serial implementation
+    n_cores: int,            # download concurrency; extraction stays serial
     log_file: str,
     gridmet_cache_dir: str,
     chunk_size: int = 3000,
@@ -209,8 +216,14 @@ def process_weather_gridmet(
                 print(f"  Failed to download {os.path.basename(dest)}")
         return var_name, yr, dest
 
-    print(f"Starting parallel download of {len(tasks)} GridMET NetCDF weather files using 8 threads...")
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    try:
+        download_workers = int(n_cores)
+    except (TypeError, ValueError):
+        download_workers = 8
+    download_workers = max(1, min(download_workers, 8))
+
+    print(f"Starting parallel download of {len(tasks)} GridMET NetCDF weather files using {download_workers} threads...")
+    with ThreadPoolExecutor(max_workers=download_workers) as executor:
         futures = {executor.submit(_download_task, t): t for t in tasks}
         for future in as_completed(futures):
             var_name, yr, dest = future.result()

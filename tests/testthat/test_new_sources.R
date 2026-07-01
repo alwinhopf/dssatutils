@@ -261,6 +261,13 @@ test_that("new public entry points are exported", {
                "process_weather_mswep", "process_weather_crujra",
                "process_weather_terraclimate", "process_soils_wise30sec",
                "process_soils_wosis",
+               "process_weather_era5_land",
+               "process_weather_aphrodite", "process_weather_anusplin",
+               "process_weather_tamsat", "process_weather_ghcn",
+               "process_weather_pgf", "process_weather_merra2",
+               "process_soils_gsde", "process_soils_china",
+               "process_soils_febr", "process_soils_slc",
+               "process_soils_esdb", "process_soils_openlandmap",
                "extract_chirps_v3_rainfall", "process_weather_nasapower_chirps_v3",
                "merge_rainfall_into_weather", "setup_cds_credentials",
                "era5land_set_cds_key")) {
