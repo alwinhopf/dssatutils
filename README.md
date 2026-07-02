@@ -12,7 +12,9 @@ previously duplicated between:
 Each function fetches data from a public source and writes DSSAT-format
 `.WTH` (weather) or `.SOL` (soil) files for a set of grid points.
 
-> **Private repository.** Install requires access to `github.com/alwinhopf/dssatutils`.
+> **GitHub install.** Install requires access to `github.com/alwinhopf/dssatutils`.
+> If Git prompts for authentication, configure Git Credential Manager, SSH keys,
+> or a GitHub token before running the install command.
 
 ## What's inside
 
