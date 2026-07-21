@@ -256,19 +256,19 @@ def _extract_chirps_v3_rain(nc_paths: list[str], ids: list[str],
 
 
 def _fetch_single_cog_val(url: str, lon: float, lat: float) -> float:
-    try:
-        import rasterio
-        with rasterio.open(url) as src:
-            val = next(src.sample([(lon, lat)]))[0]
-            if val <= _CHIRPS_V3_NODATA:
-                return np.nan
-            return float(val)
-    except Exception:
-        return np.nan
+    """Read one COG cell, allowing callers to distinguish fetch errors from nodata."""
+    import rasterio
+
+    with rasterio.open(url) as src:
+        val = next(src.sample([(lon, lat)]))[0]
+        if val <= _CHIRPS_V3_NODATA:
+            return np.nan
+        return float(val)
 
 
 def _extract_point_cog(pid: str, lat: float, lon: float, dates: list[date], product: str, stream: str) -> pd.Series:
-    results = {}
+    results: dict[str, float] = {}
+    failures = 0
     urls = []
     for d in dates:
         url = f"{_CHIRPS_V3_BASE_URL}/{stream}/{product}/cogs/{d.year}/chirps-v3.0.{product}.{d.year}.{d.month:02d}.{d.day:02d}.cog"
@@ -278,14 +278,34 @@ def _extract_point_cog(pid: str, lat: float, lon: float, dates: list[date], prod
         future_to_date = {executor.submit(_fetch_single_cog_val, url, lon, lat): d for d, url in urls}
         for future in future_to_date:
             d = future_to_date[future]
+            date_code = f"{d.year}{d.timetuple().tm_yday:03d}"
             try:
                 val = future.result()
-                if not np.isnan(val):
-                    date_code = f"{d.year}{d.timetuple().tm_yday:03d}"
-                    results[date_code] = val
+                results[date_code] = val
             except Exception:
-                pass
-    return pd.Series(results, dtype=float)
+                failures += 1
+                results[date_code] = np.nan
+    series = pd.Series(results, dtype=float)
+    series.attrs["fetch_failures"] = failures
+    return series
+
+
+def _cog_dates_for_year(year: int, months: list[int] | None) -> list[date]:
+    months_set = None if months is None else {int(month) for month in months}
+    current = date(year, 1, 1)
+    end = date(year, 12, 31)
+    dates = []
+    while current <= end:
+        if months_set is None or current.month in months_set:
+            dates.append(current)
+        current += timedelta(days=1)
+    return dates
+
+
+def _cog_cache_tag(months: list[int] | None) -> str:
+    if months is None:
+        return "all"
+    return "m" + "-".join(f"{month:02d}" for month in sorted({int(m) for m in months}))
 
 
 def _extract_chirps_v3_rain_remote_cog(
@@ -303,46 +323,47 @@ def _extract_chirps_v3_rain_remote_cog(
     for pid, lat, lon in zip(ids, lats, lons):
         all_series = []
         for yr in range(start_year, end_year + 1):
-            cache_fn = f"cog_cache_{lat:.5f}_{lon:.5f}_{product}_{stream}_{yr}.csv"
+            dates_yr = _cog_dates_for_year(yr, months)
+            expected_codes = [f"{d.year}{d.timetuple().tm_yday:03d}" for d in dates_yr]
+            cache_fn = (
+                f"cog_cache_{lat:.5f}_{lon:.5f}_{product}_{stream}_{yr}_"
+                f"{_cog_cache_tag(months)}.csv"
+            )
             cache_path = os.path.join(chirps_cache_dir, cache_fn)
             if os.path.exists(cache_path):
                 try:
-                    df_cache = pd.read_csv(cache_path)
+                    df_cache = pd.read_csv(cache_path, dtype={"DATE": str})
                     df_cache['DATE'] = df_cache['DATE'].astype(str)
-                    s_yr = pd.Series(df_cache['RAIN'].values, index=df_cache['DATE'].values, dtype=float)
-                    all_series.append(s_yr)
-                    continue
+                    if (df_cache['DATE'].tolist() == expected_codes
+                            and not df_cache['DATE'].duplicated().any()):
+                        s_yr = pd.Series(
+                            df_cache['RAIN'].values,
+                            index=df_cache['DATE'].values,
+                            dtype=float,
+                        ).dropna()
+                        all_series.append(s_yr)
+                        continue
+                    print(
+                        f"  Warning: Incomplete CHIRPS COG cache for point {pid} "
+                        f"year {yr}; re-fetching."
+                    )
                 except Exception as e:
                     print(f"  Warning: Failed to read cache for point {pid} year {yr}: {e}. Re-fetching.")
 
-            dates_yr = []
-            curr = date(yr, 1, 1)
-            end_limit = date(yr, 12, 31)
-            while curr <= end_limit:
-                dates_yr.append(curr)
-                curr += timedelta(days=1)
-
             s_yr = _extract_point_cog(pid, lat, lon, dates_yr, product, stream)
-            all_series.append(s_yr)
+            all_series.append(s_yr.dropna())
 
-            if not s_yr.empty:
+            if s_yr.attrs.get("fetch_failures", 0) == 0:
                 df_cache = pd.DataFrame({'DATE': s_yr.index, 'RAIN': s_yr.values})
                 df_cache.to_csv(cache_path, index=False)
+            else:
+                print(
+                    f"  Warning: {s_yr.attrs['fetch_failures']} CHIRPS COG request(s) "
+                    f"failed for point {pid}, year {yr}; incomplete results were not cached."
+                )
 
         if all_series:
             s_combined = pd.concat(all_series)
-            if months is not None:
-                months_set = set(months)
-                keep = []
-                for date_code in s_combined.index:
-                    yr_val = int(date_code[:4])
-                    doy_val = int(date_code[4:])
-                    d_obj = date(yr_val, 1, 1) + timedelta(days=doy_val - 1)
-                    if d_obj.month in months_set:
-                        keep.append(True)
-                    else:
-                        keep.append(False)
-                s_combined = s_combined[keep]
             out[pid] = s_combined
         else:
             out[pid] = pd.Series(dtype=float)
@@ -505,6 +526,10 @@ def extract_chirps_v3_rainfall(
     product, stream, fetch_mode, resolution = _normalize_chirps_v3_options(
         product, stream, fetch_mode, resolution
     )
+    if months is not None:
+        months = sorted({int(month) for month in months})
+        if any(month < 1 or month > 12 for month in months):
+            raise ValueError("chirps_months/months values must be calendar months 1..12")
     os.makedirs(chirps_cache_dir, exist_ok=True)
     ids, lats, lons = _point_arrays(shapefile, id_col, lat_col, lon_col)
     in_band = np.abs(lats) <= _CHIRPS_V3_LAT_LIMIT
@@ -512,17 +537,26 @@ def extract_chirps_v3_rainfall(
         print("  All points outside CHIRPS v3 coverage (|lat| > 60); using fallback rainfall.")
         return {pid: {} for pid in ids}
 
+    extract_ids = [pid for pid, keep in zip(ids, in_band) if keep]
+    extract_lats = lats[in_band]
+    extract_lons = lons[in_band]
+    empty_result = {pid: {} for pid in ids}
+
     if fetch_mode == "gee":
         extracted = _extract_chirps_v3_rain_gee(
-            ids, lats, lons, start_year, end_year, product, stream, chirps_cache_dir, months, gee_project=gee_project
+            extract_ids, extract_lats, extract_lons, start_year, end_year,
+            product, stream, chirps_cache_dir, months, gee_project=gee_project
         )
-        return {pid: series.to_dict() for pid, series in extracted.items()}
+        empty_result.update({pid: series.to_dict() for pid, series in extracted.items()})
+        return empty_result
 
     elif fetch_mode == "remote_cog":
         extracted = _extract_chirps_v3_rain_remote_cog(
-            ids, lats, lons, start_year, end_year, product, stream, chirps_cache_dir, months
+            extract_ids, extract_lats, extract_lons, start_year, end_year,
+            product, stream, chirps_cache_dir, months
         )
-        return {pid: series.to_dict() for pid, series in extracted.items()}
+        empty_result.update({pid: series.to_dict() for pid, series in extracted.items()})
+        return empty_result
 
     nc_paths: list[str] = []
     if fetch_mode == "monthly_netcdf":
@@ -545,8 +579,11 @@ def extract_chirps_v3_rainfall(
 
     print(f"  Extracting CHIRPS v3 {stream}/{product} rainfall for {len(ids)} point(s) "
           f"from {len(nc_paths)} file(s)...")
-    extracted = _extract_chirps_v3_rain(nc_paths, ids, lats, lons)
-    return {pid: series.to_dict() for pid, series in extracted.items()}
+    extracted = _extract_chirps_v3_rain(
+        nc_paths, extract_ids, extract_lats, extract_lons
+    )
+    empty_result.update({pid: series.to_dict() for pid, series in extracted.items()})
+    return empty_result
 
 
 def _process_single_nasapower_chirps_v3(args: dict) -> None:

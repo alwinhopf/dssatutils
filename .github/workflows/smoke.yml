@@ -11,7 +11,12 @@ on:
 
 jobs:
   python-tests:
-    runs-on: ubuntu-latest
+    name: Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -53,4 +58,3 @@ jobs:
       - name: Run R tests
         run: |
           Rscript -e "pkgload::load_all(); testthat::test_dir('tests/testthat')"
-

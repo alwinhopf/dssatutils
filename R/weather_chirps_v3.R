@@ -12,6 +12,14 @@
   .dssatutils_config_get(paste0("weather.chirps_v3.", key), default)
 }
 
+.chirps_v3_lat_limit <- function() {
+  .dssatutils_config_number("weather.chirps_v3.latitude_limit", 60)
+}
+
+.chirps_v3_nodata <- function() {
+  .dssatutils_config_number("weather.chirps_v3.nodata", -9999)
+}
+
 .chirps_v3_options <- function(product = NULL, stream = NULL,
                                fetch_mode = NULL, resolution = NULL) {
   product <- tolower(if (is.null(product)) .chirps_v3_config("product", "rnl") else product)
@@ -173,30 +181,33 @@
   for (yr in start_year:end_year) {
     for (i in seq_along(ids)) {
       pid <- ids[i]; lat <- lats[i]; lon <- lons[i]
-      cache_fn <- sprintf("cog_cache_%.5f_%.5f_%s_%s_%d.csv", lat, lon, product, stream, yr)
+      d_start <- as.Date(sprintf("%d-01-01", yr))
+      d_end <- as.Date(sprintf("%d-12-31", yr))
+      dates_seq <- seq(d_start, d_end, by = "1 day")
+      if (!is.null(months)) {
+        dates_seq <- dates_seq[lubridate::month(dates_seq) %in% as.integer(months)]
+      }
+      date_codes <- sprintf("%d%03d", lubridate::year(dates_seq), lubridate::yday(dates_seq))
+      month_tag <- if (is.null(months)) "all" else {
+        paste0("m", paste(sprintf("%02d", sort(unique(as.integer(months)))), collapse = "-"))
+      }
+      cache_fn <- sprintf("cog_cache_%.5f_%.5f_%s_%s_%d_%s.csv",
+                          lat, lon, product, stream, yr, month_tag)
       cache_path <- file.path(chirps_cache_dir, cache_fn)
       if (file.exists(cache_path)) {
         tryCatch({
           df_cache <- utils::read.csv(cache_path, stringsAsFactors = FALSE)
-          if (nrow(df_cache) > 0) {
-            v <- setNames(as.numeric(df_cache$RAIN), as.character(df_cache$DATE))
-            if (!is.null(months)) {
-              months_set <- as.integer(months)
-              m_vals <- as.integer(format(as.Date(names(v), "%Y%j"), "%m"))
-              v <- v[m_vals %in% months_set]
-            }
+          cache_dates <- as.character(df_cache$DATE)
+          if (identical(cache_dates, date_codes) && !anyDuplicated(cache_dates)) {
+            v <- setNames(as.numeric(df_cache$RAIN), cache_dates)
+            v <- v[!is.na(v)]
             out[[pid]] <- c(out[[pid]], v)
+            next
+          } else {
+            message(sprintf("  Incomplete CHIRPS COG cache for point %s year %d; re-fetching.",
+                            pid, yr))
           }
-          next
         }, error = function(e) {})
-      }
-
-      d_start <- as.Date(sprintf("%d-01-01", yr))
-      d_end <- as.Date(sprintf("%d-12-31", yr))
-      dates_seq <- seq(d_start, d_end, by = "1 day")
-
-      if (!is.null(months)) {
-        dates_seq <- dates_seq[lubridate::month(dates_seq) %in% months]
       }
 
       if (length(dates_seq) == 0) next
@@ -205,20 +216,24 @@
       urls <- sprintf("/vsicurl/%s/%s/%s/cogs/%d/chirps-v3.0.%s.%d.%02d.%02d.cog",
                       base_url, stream, product, yr, product, yr, lubridate::month(dates_seq), lubridate::day(dates_seq))
 
-      vals <- foreach::foreach(url = urls, .combine = c) %dopar% {
+      fetched <- foreach::foreach(url = urls, .combine = rbind) %dopar% {
         tryCatch({
-          r <- terra::rast(url)
-          as.numeric(terra::extract(r, matrix(c(lon, lat), ncol = 2))[1, 1])
-        }, error = function(e) NA_real_)
+          r <- suppressWarnings(terra::rast(url))
+          c(value = as.numeric(suppressWarnings(terra::extract(r, matrix(c(lon, lat), ncol = 2))[1, 1])),
+            ok = 1)
+        }, error = function(e) c(value = NA_real_, ok = 0))
       }
 
-      vals[is.na(vals) | vals <= -9999] <- NA_real_
-      date_codes <- sprintf("%d%03d", lubridate::year(dates_seq), lubridate::yday(dates_seq))
+      vals <- fetched[, "value"]
+      vals[is.na(vals) | vals <= .chirps_v3_nodata()] <- NA_real_
 
-      keep_cache <- !is.na(vals)
-      if (any(keep_cache)) {
-        df_cache <- data.frame(DATE = date_codes[keep_cache], RAIN = vals[keep_cache])
+      if (all(fetched[, "ok"] == 1)) {
+        df_cache <- data.frame(DATE = date_codes, RAIN = vals)
         utils::write.csv(df_cache, cache_path, row.names = FALSE)
+      } else {
+        message(sprintf(
+          "  Warning: %d CHIRPS COG request(s) failed for point %s, year %d; incomplete results were not cached.",
+          sum(fetched[, "ok"] != 1), pid, yr))
       }
 
       keep <- !is.na(vals)
@@ -286,30 +301,43 @@ extract_chirps_v3_rainfall <- function(shapefile, start_year, end_year,
                                        months = NULL, gee_project = NULL,
                                        timeout = NULL) {
   opt <- .chirps_v3_options(product, stream, fetch_mode, resolution)
+  if (!is.null(months)) {
+    months <- sort(unique(as.integer(months)))
+    if (any(is.na(months)) || any(months < 1L | months > 12L)) {
+      stop("chirps_months/months values must be calendar months 1..12.", call. = FALSE)
+    }
+  }
   dir.create(chirps_cache_dir, showWarnings = FALSE, recursive = TRUE)
   coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
   ids <- coords_list$ids
   lats <- coords_list$lats
   lons <- coords_list$lons
   out <- setNames(vector("list", length(ids)), ids)
-  if (!any(abs(lats) <= .chirps_v3_lat_limit)) {
+  in_band <- abs(lats) <= .chirps_v3_lat_limit()
+  if (!any(in_band)) {
     message("  All points outside CHIRPS v3 coverage (|lat| > 60); using fallback rainfall.")
     return(out)
   }
 
+  extraction_shape <- shapefile[in_band, , drop = FALSE]
+
   if (opt$fetch_mode == "remote_cog") {
     message("  Extracting CHIRPS v3 rainfall remotely from COGs in parallel...")
-    return(.extract_chirps_v3_rain_remote_cog_native(shapefile, start_year, end_year,
+    extracted <- .extract_chirps_v3_rain_remote_cog_native(extraction_shape, start_year, end_year,
                                                      id_col, lat_col, lon_col,
-                                                     chirps_cache_dir, opt$product, opt$stream, months))
+                                                     chirps_cache_dir, opt$product, opt$stream, months)
+    out[names(extracted)] <- extracted
+    return(out)
   }
 
   if (opt$fetch_mode == "gee") {
     message("  Extracting CHIRPS v3 rainfall via Google Earth Engine...")
-    return(.run_python_gee_extraction(shapefile, start_year, end_year,
+    extracted <- .run_python_gee_extraction(extraction_shape, start_year, end_year,
                                       id_col, lat_col, lon_col,
                                       chirps_cache_dir, opt$product, opt$stream, opt$fetch_mode,
-                                      gee_project = gee_project))
+                                      gee_project = gee_project)
+    out[names(extracted)] <- extracted
+    return(out)
   }
 
   files <- character()
@@ -339,26 +367,27 @@ extract_chirps_v3_rainfall <- function(shapefile, start_year, end_year,
     return(out)
   }
 
-  pts <- terra::vect(data.frame(lon = lons, lat = lats),
+  extract_ids <- ids[in_band]
+  pts <- terra::vect(data.frame(lon = lons[in_band], lat = lats[in_band]),
                      geom = c("lon", "lat"), crs = "EPSG:4326")
   message(sprintf("  Extracting CHIRPS v3 %s/%s rainfall for %d point(s) from %d file(s)...",
-                  opt$stream, opt$product, length(ids), length(files)))
+                  opt$stream, opt$product, length(extract_ids), length(files)))
   for (path in files) {
     tryCatch({
-      r <- terra::rast(path)
+      r <- suppressWarnings(terra::rast(path))
       tvals <- terra::time(r)
       if (all(is.na(tvals))) {
         tvals <- as.Date(gsub(".*?(\\d{4}\\.\\d{2}\\.\\d{2}).*", "\\1",
                                names(r)), format = "%Y.%m.%d")
       }
       date_codes <- sprintf("%d%03d", lubridate::year(tvals), lubridate::yday(tvals))
-      ex <- as.matrix(terra::extract(r, pts, ID = FALSE))
-      ex[ex <= .chirps_v3_nodata] <- NA
-      for (j in seq_along(ids)) {
+      ex <- as.matrix(suppressWarnings(terra::extract(r, pts, ID = FALSE)))
+      ex[ex <= .chirps_v3_nodata()] <- NA
+      for (j in seq_along(extract_ids)) {
         vals <- ex[j, ]
         keep <- !is.na(vals)
         if (any(keep)) {
-          out[[ids[j]]] <- c(out[[ids[j]]], setNames(as.numeric(vals[keep]), date_codes[keep]))
+          out[[extract_ids[j]]] <- c(out[[extract_ids[j]]], setNames(as.numeric(vals[keep]), date_codes[keep]))
         }
       }
     }, error = function(e)
@@ -428,7 +457,7 @@ process_weather_nasapower_chirps_v3 <- function(shapefile, start_year, end_year,
 
       merge <- merge_rainfall_into_weather(weather_data, chirps_rain[[point_id]])
       weather_data <- merge$weather_data
-      n_chirps <- if (abs(latitude) <= .chirps_v3_lat_limit) merge$n_replaced else 0L
+      n_chirps <- if (abs(latitude) <= .chirps_v3_lat_limit()) merge$n_replaced else 0L
       rain_src <- if (n_chirps > 0)
         sprintf("CHIRPS-v3 %s/%s where available, %d days; NASA-POWER otherwise",
                 opt$stream, opt$product, n_chirps)

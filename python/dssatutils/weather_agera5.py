@@ -337,25 +337,6 @@ def _process_weather_agera5_timeseries(
     agera5_data_format: str = "csv",
     agera5_timeseries_chunk_degrees: float = _AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
 ) -> None:
-    backend = str(agera5_backend or "gridded").lower().replace("-", "_")
-    if backend in ("timeseries", "time_series", "ts"):
-        return _process_weather_agera5_timeseries(
-            shapefile=shapefile,
-            start_year=start_year,
-            end_year=end_year,
-            output_dir=output_dir,
-            id_col=id_col,
-            lat_col=lat_col,
-            lon_col=lon_col,
-            n_cores=n_cores,
-            log_file=log_file,
-            agera5_cache_dir=agera5_cache_dir,
-            agera5_data_format=agera5_data_format,
-            agera5_timeseries_chunk_degrees=agera5_timeseries_chunk_degrees,
-        )
-    if backend not in ("gridded", "grid", "classic"):
-        raise ValueError("agera5_backend must be 'gridded' or 'timeseries'.")
-
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(agera5_cache_dir, exist_ok=True)
 
@@ -452,8 +433,14 @@ def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
     *df* must contain DATE, SRAD, TMAX, TMIN, RAIN, TDEW, RH2M, WIND. Returns
     the output path. Shared formatting with the NASA POWER / Open-Meteo writers.
     """
-    tav = _calc_tav(df)
-    amp = _calc_amp(df)
+    climatology = df.copy()
+    climatology[["TMAX", "TMIN"]] = climatology[["TMAX", "TMIN"]].where(
+        climatology[["TMAX", "TMIN"]] > -90
+    )
+    tav = _calc_tav(climatology)
+    amp = _calc_amp(climatology)
+    if not np.isfinite(tav) or not np.isfinite(amp):
+        raise ValueError("No valid AgERA5 temperature climatology for point.")
     header = (
         f"$WEATHER DATA: AgERA5 (Point ID: {pid})\n"
         f"@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n"
@@ -503,6 +490,25 @@ def process_weather_agera5(
     *agera5_cache_dir* and reused. Unit conversions: temperature K→°C (−273.15),
     solar radiation J/m²/day → MJ/m²/day (×1e-6).
     """
+    backend = str(agera5_backend or "gridded").lower().replace("-", "_")
+    if backend in ("timeseries", "time_series", "ts"):
+        return _process_weather_agera5_timeseries(
+            shapefile=shapefile,
+            start_year=start_year,
+            end_year=end_year,
+            output_dir=output_dir,
+            id_col=id_col,
+            lat_col=lat_col,
+            lon_col=lon_col,
+            n_cores=n_cores,
+            log_file=log_file,
+            agera5_cache_dir=agera5_cache_dir,
+            agera5_data_format=agera5_data_format,
+            agera5_timeseries_chunk_degrees=agera5_timeseries_chunk_degrees,
+        )
+    if backend not in ("gridded", "grid", "classic"):
+        raise ValueError("agera5_backend must be 'gridded' or 'timeseries'.")
+
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(agera5_cache_dir, exist_ok=True)
 

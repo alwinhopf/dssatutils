@@ -64,7 +64,7 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
                                              n_cores, log_file, chirps_cache_dir,
                                              timeout = NULL) {
 
-  res <- if (exists("CHIRPS_RESOLUTION")) CHIRPS_RESOLUTION else "p05"
+  res <- if (exists("CHIRPS_RESOLUTION")) CHIRPS_RESOLUTION else "p25"
   chirps_lat_limit <- 50.0
   chirps_nodata <- -9999
 
@@ -92,9 +92,14 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
   # --- 1. CHIRPS: download yearly netCDFs and extract per-point daily rain ---
   # chirps_rain[[point_id]] is a named numeric vector keyed by "YYYYDOY".
   chirps_rain <- setNames(vector("list", length(ids)), ids)
-  if (any(abs(lats) <= chirps_lat_limit)) {
+  in_band <- abs(lats) <= chirps_lat_limit
+  if (any(in_band)) {
     base_url <- "https://data.chc.ucsb.edu/products/CHIRPS-2.0/global_daily/netcdf"
-    pts <- terra::vect(data.frame(lon = lons, lat = lats),
+    # Do not ask GDAL to sample outside the CHIRPS raster extent. Besides
+    # producing meaningless no-data rows, remote NetCDF drivers emit
+    # arrayStartIdx out-of-range warnings for those coordinates.
+    extract_ids <- ids[in_band]
+    pts <- terra::vect(data.frame(lon = lons[in_band], lat = lats[in_band]),
                        geom = c("lon", "lat"), crs = "EPSG:4326")
     for (yr in start_year:end_year) {
       fname <- sprintf("chirps-v2.0.%d.days_%s.nc", yr, res)
@@ -106,7 +111,7 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
       }
       if (!file.exists(dest) || !.chirps_valid_netcdf(dest)) next
       tryCatch({
-        r <- terra::rast(dest)                      # one layer per day
+        r <- suppressWarnings(terra::rast(dest))                      # one layer per day
         tvals <- terra::time(r)
         if (all(is.na(tvals))) {
           # Fall back to layer names if time() is unset.
@@ -115,15 +120,15 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
         }
         date_codes <- sprintf("%d%03d", lubridate::year(tvals),
                               lubridate::yday(tvals))
-        ex <- terra::extract(r, pts, ID = FALSE)     # rows=points, cols=days
+        ex <- suppressWarnings(terra::extract(r, pts, ID = FALSE))     # rows=points, cols=days
         ex <- as.matrix(ex)
         ex[ex <= chirps_nodata] <- NA
-        for (j in seq_along(ids)) {
+        for (j in seq_along(extract_ids)) {
           vals <- ex[j, ]
           keep <- !is.na(vals)
           if (any(keep)) {
             v <- setNames(as.numeric(vals[keep]), date_codes[keep])
-            chirps_rain[[ids[j]]] <- c(chirps_rain[[ids[j]]], v)
+            chirps_rain[[extract_ids[j]]] <- c(chirps_rain[[extract_ids[j]]], v)
           }
         }
       }, error = function(e)

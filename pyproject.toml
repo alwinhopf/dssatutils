@@ -11,7 +11,7 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Alwin Hopf" }]
 dependencies = [
-    "numpy>=1.26",
+    "numpy>=1.26,<2.3",
     "pandas>=2.2",
     "geopandas>=0.14",
     "shapely>=2.0",
@@ -51,6 +51,9 @@ dssatutils = ["config.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:numpy.ndarray size changed:RuntimeWarning",
+]
 markers = [
     "live: tests that download live remote data and may use hundreds of MiB of cache",
 ]

@@ -12,6 +12,7 @@
 import gc
 import math
 import os
+import warnings
 import threading
 from datetime import date, timedelta
 
@@ -19,6 +20,19 @@ import numpy as np
 import pandas as pd
 import requests
 import xarray as xr
+
+# netCDF4's Python 3.13/NumPy 2 wheels (and locally rebuilt extension) can emit
+# Cython's obsolete opaque-PyArrayObject size warning even when compiled against
+# the active NumPy headers. Import it once under an exact warning filter so
+# xarray does not surface that false ABI alarm later. Other RuntimeWarnings are
+# deliberately unaffected.
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message=r"numpy\.ndarray size changed, may indicate binary incompatibility.*",
+        category=RuntimeWarning,
+    )
+    import netCDF4 as _netcdf4  # noqa: F401
 
 from typing import Dict, Tuple
 
@@ -50,12 +64,16 @@ def _calc_tav(tmax_arr: np.ndarray, tmin_arr: np.ndarray,
 
 def _calc_amp(tmax_arr: np.ndarray, tmin_arr: np.ndarray,
               dates: pd.DatetimeIndex) -> float:
-    """Mean annual temperature amplitude (monthly means)."""
+    """DSSAT AMP: half the range of pooled calendar-month mean temperature.
+
+    This mirrors ``DSSAT::calc_AMP`` used by the R twin. Pooling by calendar
+    month across the full weather period also makes a repeated climatology
+    invariant to the number of years in the file.
+    """
     df = pd.DataFrame({"tmax": tmax_arr, "tmin": tmin_arr}, index=dates)
     df["tavg"] = (df["tmax"] + df["tmin"]) / 2.0
-    monthly = df["tavg"].resample("ME").mean()
-    annual = monthly.resample("YE").agg(lambda x: x.max() - x.min())
-    return float(annual.mean())
+    monthly = df.groupby(df.index.month)["tavg"].mean()
+    return float((monthly.max() - monthly.min()) / 2.0)
 
 
 def _validate_gridmet_nc(path: str, abbrev: str) -> bool:

@@ -98,7 +98,7 @@ format_dssat_soil_single <- function(profile_data, output_dir) {
       sdul <- sub("^0", " ", sdul)
       ssat <- sub("^0", " ", ssat)
       
-      depth_format <- ifelse(depth_val < 10, sprintf("%6d", depth_val), sprintf("%5d", depth_val))
+      depth_format <- sprintf("%6d", depth_val)
       
       cat(sprintf("%s   -99 %s %s %s  1.00   -99 %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
                   depth_format, slll, sdul, ssat,
@@ -161,7 +161,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   # record list(.fail=TRUE, ID, latitude, longitude, reason) on FAILURE. The
   # reason is prefixed with a category ("network:", "no-coverage:", "no-soil:",
   # "no-layers:") so the main process can tally and log exactly why each point
-  # produced no .SOL — instead of the old silent return(NULL).
+  # produced no .SOL -- instead of the old silent return(NULL).
   process_point_wrapper <- function(point_data_row) {
     ID   <- as.character(point_data_row[[id_col]])
     LATv <- point_data_row[[lat_col]]
@@ -226,7 +226,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
                           if (is.na(pq$error)) "no detail" else pq$error)))
     props <- as.data.frame(pq$data)
     if (nrow(props) == 0)
-      return(fail(sprintf("no-soil: map unit has no soil horizons%s — typically Water / Urban / Pits / Rock outcrop (mukey %s)",
+      return(fail(sprintf("no-soil: map unit has no soil horizons%s -- typically Water / Urban / Pits / Rock outcrop (mukey %s)",
                           if (!is.na(muname) && nzchar(muname)) sprintf(" [%s]", muname) else "",
                           paste(soil_data_query$mukey, collapse = ","))))
 
@@ -363,7 +363,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
   }
 
   # --- 4. FAILURE REPORT ---
-  # Explain, per point, IF and WHY no soil profile was produced — written next to
+  # Explain, per point, IF and WHY no soil profile was produced -- written next to
   # the soil CSV so missing .SOL files are auditable instead of silent.
   if (length(all_fails) > 0) {
     fail_df <- data.frame(
@@ -383,9 +383,9 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
     tb <- sort(table(cats), decreasing = TRUE)
     for (nm in names(tb)) message(sprintf("   - %-13s %d   (%s)", paste0(nm, ":"), tb[[nm]],
         switch(nm,
-          "network"     = "transient SDA/server/timeout — re-run to retry these",
+          "network"     = "transient SDA/server/timeout -- re-run to retry these",
           "no-coverage" = "no SSURGO map unit here (outside survey area / offshore)",
-          "no-soil"     = "non-soil map unit (Water, Urban, Pits, Rock) — no horizons exist",
+          "no-soil"     = "non-soil map unit (Water, Urban, Pits, Rock) -- no horizons exist",
           "no-layers"   = "horizons present but unusable after depth filtering",
           "other")))
     message(sprintf("   Per-point details (ID, lat, long, reason) -> %s", failure_log))

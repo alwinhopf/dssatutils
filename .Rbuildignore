@@ -1,0 +1,10 @@
+^\.git$
+^\.gitignore$
+^\.gitattributes$
+^\.github$
+^\.pytest_cache$
+^\.live_cache$
+^build$
+^migrate$
+^.*\.Rproj$
+^\.Rproj\.user$

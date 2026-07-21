@@ -3,6 +3,8 @@ Type: Package
 Title: Shared Weather and Soil Download Utilities for DSSAT
 Version: 0.4.0
 Authors@R: person("Alwin", "Hopf", email = "alwinhopf@gmail.com", role = c("aut", "cre"))
+Author: Alwin Hopf
+Maintainer: Alwin Hopf <alwinhopf@gmail.com>
 Description: Reusable functions that download weather and soil data from a range of
     public sources (Daymet, GridMET, NASA POWER, Open-Meteo, AgERA5, NASA
     POWER + CHIRPS v2/v3, DWD station data, E-OBS European grids, BR-DWGD/Xavier Brazil
@@ -25,7 +27,6 @@ Imports:
     soilDB,
     sf,
     terra,
-    ncdf4,
     httr,
     jsonlite,
     dplyr,
@@ -43,5 +44,8 @@ Suggests:
     DBI,
     RSQLite,
     odbc,
-    RODBC
+    RODBC,
+    getPass,
+    readxl,
+    testthat (>= 3.0.0)
 RoxygenNote: 7.3.1

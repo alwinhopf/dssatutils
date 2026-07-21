@@ -891,7 +891,7 @@ build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl
       SLLL = clip01(soil_ptf_saxton_slll(silt_pct, clay_pct, soc, coalesce_num(bulk_density, 1.4), 0)),
       SDUL = clip01(soil_ptf_saxton_sdul(silt_pct, clay_pct, soc, coalesce_num(bulk_density, 1.4), 0)),
       SSAT = clip01(soil_ptf_saxton_ssat(silt_pct, clay_pct, soc, coalesce_num(bulk_density, 1.4), 0)),
-      SDUL = pmax(SDUL, SLLL + 0.005),
+      SDUL = pmax(SDUL, SLLL + 0.04),
       SSAT = pmax(SSAT, SDUL + 0.01),
       SLB = as.integer(round(depth_num)),
       SLMH = '-99',
@@ -1225,6 +1225,22 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
 
 # ---- Soil Pull by Name / Coordinates API -------------------------------------
 
+.alderman_point_geometry <- function(pt_geom = NULL, lat = NULL, long = NULL, lon = NULL,
+                                     required = FALSE) {
+  if (!is.null(long) && !is.null(lon) &&
+      !isTRUE(all.equal(as.numeric(long), as.numeric(lon)))) {
+    stop("lon and long were both supplied with different values.", call. = FALSE)
+  }
+  if (is.null(long)) long <- lon
+  if (is.null(pt_geom) && !is.null(lat) && !is.null(long)) {
+    pt_geom <- sf::st_sfc(sf::st_point(c(as.numeric(long), as.numeric(lat))), crs = 4326)
+  }
+  if (isTRUE(required) && is.null(pt_geom)) {
+    stop("Either pt_geom or lat and lon/long must be supplied.", call. = FALSE)
+  }
+  pt_geom
+}
+
 #' Pull soil profile by name using Alderman SSURGO/STATSGO logic
 #'
 #' @param soil_name Character string, name of the soil series (compname)
@@ -1240,12 +1256,10 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
 #' @export
 pull_profile_by_name_alderman <- function(soil_name, pt_geom = NULL, lat = NULL, long = NULL,
                                           SSURGO = TRUE, STATSGO = FALSE, standardize_layers = FALSE,
-                                          log_file = NULL, profile_id = NULL) {
+                                          log_file = NULL, profile_id = NULL, lon = NULL) {
   soil_helper_log(log_file, "INFO", "PULL_BY_NAME", paste("Pulling profile by name:", soil_name))
 
-  if (is.null(pt_geom) && !is.null(lat) && !is.null(long)) {
-    pt_geom <- sf::st_sfc(sf::st_point(c(as.numeric(long), as.numeric(lat))), crs = 4326)
-  }
+  pt_geom <- .alderman_point_geometry(pt_geom, lat, long, lon)
 
   comp_condition <- paste0("compname IN ", sql_in_from_values(soil_name))
 
@@ -1331,14 +1345,8 @@ pull_profile_by_name_alderman <- function(soil_name, pt_geom = NULL, lat = NULL,
 #' @export
 pull_profile_by_coords_alderman <- function(pt_geom = NULL, lat = NULL, long = NULL, site = "SITE",
                                             SSURGO = TRUE, STATSGO = FALSE, standardize_layers = FALSE,
-                                            log_file = NULL) {
-  if (is.null(pt_geom) && (is.null(lat) || is.null(long))) {
-    stop("Either pt_geom or lat and long must be supplied.")
-  }
-
-  if (is.null(pt_geom)) {
-    pt_geom <- sf::st_sfc(sf::st_point(c(as.numeric(long), as.numeric(lat))), crs = 4326)
-  }
+                                            log_file = NULL, lon = NULL) {
+  pt_geom <- .alderman_point_geometry(pt_geom, lat, long, lon, required = TRUE)
 
   profile_lat <- as.numeric(sf::st_coordinates(pt_geom)[, 2])
   profile_lon <- as.numeric(sf::st_coordinates(pt_geom)[, 1])

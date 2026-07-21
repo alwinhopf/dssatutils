@@ -98,6 +98,177 @@ def test_chirps_v3_path_builder_for_rnl_sat_and_prelim():
     assert _months_for_range(2010, 2010, months=[3]) == [(2010, 3)]
 
 
+def test_chirps_v3_cog_month_filter_and_complete_cache(tmp_path, monkeypatch):
+    import dssatutils.weather_chirps_v3 as chirps
+
+    calls = []
+
+    def fake_extract(pid, lat, lon, dates, product, stream):
+        calls.append(list(dates))
+        values = {
+            f"{d.year}{d.timetuple().tm_yday:03d}": float(d.day)
+            for d in dates
+        }
+        series = pd.Series(values, dtype=float)
+        series.attrs["fetch_failures"] = 0
+        return series
+
+    monkeypatch.setattr(chirps, "_extract_point_cog", fake_extract)
+    result = chirps._extract_chirps_v3_rain_remote_cog(
+        ["P1"], np.array([0.0]), np.array([30.0]), 2010, 2010,
+        "rnl", "final", str(tmp_path), months=[3],
+    )
+    assert len(calls) == 1 and len(calls[0]) == 31
+    assert len(result["P1"]) == 31
+    cache = list(tmp_path.glob("*_m03.csv"))
+    assert len(cache) == 1
+
+    def should_not_fetch(*args, **kwargs):
+        raise AssertionError("a complete COG cache should be reused")
+
+    monkeypatch.setattr(chirps, "_extract_point_cog", should_not_fetch)
+    cached = chirps._extract_chirps_v3_rain_remote_cog(
+        ["P1"], np.array([0.0]), np.array([30.0]), 2010, 2010,
+        "rnl", "final", str(tmp_path), months=[3],
+    )
+    assert cached["P1"].equals(result["P1"])
+
+
+def test_chirps_v3_mixed_coverage_does_not_extract_out_of_band_points(tmp_path, monkeypatch):
+    import dssatutils.weather_chirps_v3 as chirps
+
+    seen = {}
+
+    def fake_remote(ids, lats, lons, *args, **kwargs):
+        seen["ids"] = list(ids)
+        return {pid: pd.Series({"2010001": 1.0}) for pid in ids}
+
+    monkeypatch.setattr(chirps, "_extract_chirps_v3_rain_remote_cog", fake_remote)
+    points = pd.DataFrame({
+        "ID": ["IN", "OUT"],
+        "LAT": [0.0, 65.0],
+        "LONG": [30.0, 30.0],
+    })
+    result = chirps.extract_chirps_v3_rainfall(
+        points, 2010, 2010, "ID", "LAT", "LONG", str(tmp_path),
+        fetch_mode="remote_cog", months=[1],
+    )
+    assert seen["ids"] == ["IN"]
+    assert result["IN"] == {"2010001": 1.0}
+    assert result["OUT"] == {}
+
+    try:
+        chirps.extract_chirps_v3_rainfall(
+            points.iloc[:1], 2010, 2010, "ID", "LAT", "LONG", str(tmp_path),
+            fetch_mode="remote_cog", months=[13],
+        )
+    except ValueError as exc:
+        assert "1..12" in str(exc)
+    else:
+        raise AssertionError("invalid CHIRPS month was accepted")
+
+
+def test_agera5_timeseries_backend_dispatches_and_parses_csv(tmp_path, monkeypatch):
+    import dssatutils.weather_agera5 as agera5
+
+    captured = {}
+
+    def fake_timeseries(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agera5, "_process_weather_agera5_timeseries", fake_timeseries)
+    points = pd.DataFrame({"ID": ["P1"], "LAT": [40.0], "LONG": [-90.0]})
+    agera5.process_weather_agera5(
+        points, 2010, 2010, str(tmp_path / "out"), "ID", "LAT", "LONG",
+        1, str(tmp_path / "errors.log"), str(tmp_path / "cache"),
+        agera5_backend="time-series", agera5_data_format="csv",
+        agera5_timeseries_chunk_degrees=3.5,
+    )
+    assert captured["agera5_data_format"] == "csv"
+    assert captured["agera5_timeseries_chunk_degrees"] == 3.5
+
+    csv_path = tmp_path / "agera5.csv"
+    pd.DataFrame({
+        "valid_time": ["2010-01-01"],
+        "latitude": [40.0],
+        "longitude": [-90.0],
+        "Temperature_Air_2m_Max_24h": [300.0],
+        "Temperature_Air_2m_Min_24h": [280.0],
+        "Solar_Radiation_Flux": [12_000_000.0],
+        "Precipitation_Flux": [2.0],
+        "Dew_Point_Temperature_2m_Mean_24h": [275.0],
+        "Relative_Humidity_2m_15h": [60.0],
+        "Wind_Speed_10m_Mean_24h": [3.0],
+    }).to_csv(csv_path, index=False)
+    parsed = agera5._read_agera5_timeseries_csv(str(csv_path))
+    assert parsed.loc[0, "DATE"] == "2010001"
+    assert abs(parsed.loc[0, "TMAX"] - 26.85) < 1e-9
+    assert parsed.loc[0, "SRAD"] == 12.0
+
+
+def test_agera5_rejects_unknown_backend_before_network(tmp_path):
+    import dssatutils.weather_agera5 as agera5
+
+    points = pd.DataFrame({"ID": ["P1"], "LAT": [40.0], "LONG": [-90.0]})
+    try:
+        agera5.process_weather_agera5(
+            points, 2010, 2010, str(tmp_path / "out"), "ID", "LAT", "LONG",
+            1, str(tmp_path / "errors.log"), str(tmp_path / "cache"),
+            agera5_backend="not-a-backend",
+        )
+    except ValueError as exc:
+        assert "gridded" in str(exc) and "timeseries" in str(exc)
+    else:
+        raise AssertionError("unknown AgERA5 backend was accepted")
+
+
+def test_agera5_timeseries_backend_writes_weather_file(tmp_path, monkeypatch):
+    import dssatutils.weather_agera5 as agera5
+
+    dates = pd.date_range("2010-01-01", "2010-12-31", freq="D")
+    csv_path = tmp_path / "agera5_timeseries.csv"
+    pd.DataFrame({
+        "valid_time": dates,
+        "latitude": 40.0,
+        "longitude": -90.0,
+        "Temperature_Air_2m_Max_24h": 300.0,
+        "Temperature_Air_2m_Min_24h": 280.0,
+        "Solar_Radiation_Flux": 12_000_000.0,
+        "Precipitation_Flux": 2.0,
+        "Dew_Point_Temperature_2m_Mean_24h": 275.0,
+        "Relative_Humidity_2m_15h": 60.0,
+        "Wind_Speed_10m_Mean_24h": 3.0,
+    }).to_csv(csv_path, index=False)
+    monkeypatch.setattr(
+        agera5, "_download_agera5_timeseries",
+        lambda year, area, cache_dir, data_format: str(csv_path),
+    )
+    points = pd.DataFrame({"ID": ["P1"], "LAT": [40.0], "LONG": [-90.0]})
+    out_dir = tmp_path / "out"
+    agera5.process_weather_agera5(
+        points, 2010, 2010, str(out_dir), "ID", "LAT", "LONG", 1,
+        str(tmp_path / "errors.log"), str(tmp_path / "cache"),
+        agera5_backend="timeseries",
+    )
+    lines = (out_dir / "P1.WTH").read_text().splitlines()
+    assert len([line for line in lines if line.startswith("2010")]) == 365
+    assert "  26.9" in lines[4]
+
+
+def test_alderman_coordinate_aliases_and_point_geometry():
+    from shapely.geometry import Point
+    from dssatutils.soil_ssurgo_alderman import _alderman_coordinates
+
+    assert _alderman_coordinates(lat=40, long=-90, required=True) == (40.0, -90.0)
+    assert _alderman_coordinates(pt_geom=Point(-89, 41), required=True) == (41.0, -89.0)
+    try:
+        _alderman_coordinates(lat=40, lon=-90, long=-91)
+    except ValueError as exc:
+        assert "different values" in str(exc)
+    else:
+        raise AssertionError("conflicting lon/long aliases were accepted")
+
+
 def test_gridded_weather_writer_and_unit_helpers():
     from dssatutils import weather_gridded_common as g
     dates = pd.date_range("2001-01-01", "2001-12-31", freq="D")

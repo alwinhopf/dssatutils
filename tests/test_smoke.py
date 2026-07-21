@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import shutil
+import numpy as np
 import pandas as pd
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -99,6 +100,18 @@ def test_wth_writer_synthetic():
         assert data[0][:7].strip() == "2010001", \
             f"first DATE token wrong: {data[0][:7].strip()!r}"
         assert "nan" not in "".join(data).lower(), "NaN found in data block"
+
+
+def test_gridmet_amp_matches_dssat_definition():
+    from dssatutils.weather_gridmet import _calc_amp
+
+    dates = pd.date_range("2001-01-01", "2002-12-31", freq="D")
+    monthly_mean = dates.month.to_numpy(dtype=float)
+    tmax = monthly_mean + 5.0
+    tmin = monthly_mean - 5.0
+
+    # Calendar-month means span 1..12 C; DSSAT AMP is half that range.
+    assert _calc_amp(tmax, tmin, dates) == 5.5
 
 
 # ---------------------------------------------------------------------------

@@ -218,6 +218,94 @@ test_that("CHIRPS v3 options validation supports gee and remote_cog", {
   expect_error(dssatutils:::.chirps_v3_options(fetch_mode = "gee", stream = "prelim"))
 })
 
+test_that("CHIRPS v3 public path handles points outside its latitude coverage", {
+  points <- data.frame(ID = "OUT", LAT = 65, LONG = 20)
+  work <- tempfile(); dir.create(work); on.exit(unlink(work, recursive = TRUE), add = TRUE)
+  result <- extract_chirps_v3_rainfall(
+    points, 2010, 2010, "ID", "LAT", "LONG", work,
+    fetch_mode = "remote_cog", months = 3
+  )
+  expect_named(result, "OUT")
+  expect_length(result$OUT, 0)
+  expect_error(
+    extract_chirps_v3_rainfall(points, 2010, 2010, "ID", "LAT", "LONG", work,
+                               fetch_mode = "remote_cog", months = 13),
+    "1..12", fixed = TRUE
+  )
+})
+
+test_that("AgERA5 time-series helpers match the Python API and unit conversions", {
+  args <- names(formals(process_weather_agera5))
+  expect_true(all(c("agera5_backend", "agera5_data_format",
+                    "agera5_timeseries_chunk_degrees") %in% args))
+
+  chunks <- dssatutils:::.agera5_split_timeseries_chunks(
+    c(40, 40.1), c(-90, -89.9), chunk_degrees = 3.5
+  )
+  expect_length(chunks, 1)
+  expect_lte(chunks[[1]]$area[1] - chunks[[1]]$area[3], 5)
+  expect_lte(chunks[[1]]$area[4] - chunks[[1]]$area[2], 5)
+
+  work <- tempfile(fileext = ".csv")
+  on.exit(unlink(work), add = TRUE)
+  readr::write_csv(data.frame(
+    valid_time = "2010-01-01", latitude = 40, longitude = -90,
+    Temperature_Air_2m_Max_24h = 300,
+    Temperature_Air_2m_Min_24h = 280,
+    Solar_Radiation_Flux = 12000000,
+    Precipitation_Flux = 2,
+    Dew_Point_Temperature_2m_Mean_24h = 275,
+    Relative_Humidity_2m_15h = 60,
+    Wind_Speed_10m_Mean_24h = 3
+  ), work)
+  parsed <- dssatutils:::.agera5_read_timeseries_csv(work)
+  expect_equal(parsed$DATE, "2010001")
+  expect_equal(parsed$TMAX, 26.85, tolerance = 1e-9)
+  expect_equal(parsed$SRAD, 12)
+})
+
+test_that("AgERA5 time-series backend writes a complete weather file", {
+  work <- tempfile(); dir.create(work); on.exit(unlink(work, recursive = TRUE), add = TRUE)
+  csv_path <- file.path(work, "agera5_timeseries.csv")
+  dates <- seq(as.Date("2010-01-01"), as.Date("2010-12-31"), by = "day")
+  readr::write_csv(data.frame(
+    valid_time = dates, latitude = 40, longitude = -90,
+    Temperature_Air_2m_Max_24h = 300,
+    Temperature_Air_2m_Min_24h = 280,
+    Solar_Radiation_Flux = 12000000,
+    Precipitation_Flux = 2,
+    Dew_Point_Temperature_2m_Mean_24h = 275,
+    Relative_Humidity_2m_15h = 60,
+    Wind_Speed_10m_Mean_24h = 3
+  ), csv_path)
+  local_mocked_bindings(
+    .agera5_download_timeseries_job = function(job) csv_path,
+    .package = "dssatutils"
+  )
+  points <- data.frame(ID = "P1", LAT = 40, LONG = -90)
+  dssatutils:::.process_weather_agera5_timeseries(
+    points, 2010, 2010, file.path(work, "out"), "ID", "LAT", "LONG", 1,
+    file.path(work, "errors.log"), file.path(work, "cache")
+  )
+  out <- file.path(work, "out", "P1.WTH")
+  expect_true(file.exists(out))
+  expect_equal(sum(grepl("^2010", readLines(out))), 365)
+})
+
+test_that("Alderman coordinate APIs accept lon and long aliases", {
+  point_from_lon <- dssatutils:::.alderman_point_geometry(lat = 40, lon = -90,
+                                                          required = TRUE)
+  point_from_long <- dssatutils:::.alderman_point_geometry(lat = 40, long = -90,
+                                                           required = TRUE)
+  expect_equal(sf::st_coordinates(point_from_lon), sf::st_coordinates(point_from_long))
+  expect_error(
+    dssatutils:::.alderman_point_geometry(lat = 40, lon = -90, long = -91),
+    "different values"
+  )
+  expect_true("lon" %in% names(formals(pull_profile_by_name_alderman)))
+  expect_true("lon" %in% names(formals(pull_profile_by_coords_alderman)))
+})
+
 # ===================================================================
 # AgMIP/Han: wrapper around external .SOL mapper
 # ===================================================================

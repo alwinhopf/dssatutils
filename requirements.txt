@@ -10,7 +10,8 @@
 # Versions below are known-good as of 2025; relax or pin tighter to taste.
 
 # --- Core data / geospatial ---
-numpy==1.26.4
+numpy==1.26.4; python_version < "3.13"
+numpy==2.2.6; python_version >= "3.13"
 pandas==2.2.2
 geopandas==0.14.4
 shapely==2.0.4

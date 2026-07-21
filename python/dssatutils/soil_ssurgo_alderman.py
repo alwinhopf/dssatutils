@@ -1254,6 +1254,46 @@ def process_soils_ssurgo_alderman(
 
 # ---- Soil Pull by Name / Coordinates API -------------------------------------
 
+def _alderman_coordinates(
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    *,
+    long: Optional[float] = None,
+    pt_geom=None,
+    required: bool = False,
+) -> tuple[Optional[float], Optional[float]]:
+    """Normalize R/Python coordinate aliases and point-geometry inputs."""
+    if lon is not None and long is not None and not math.isclose(float(lon), float(long)):
+        raise ValueError("lon and long were both supplied with different values")
+    if lon is None:
+        lon = long
+
+    if pt_geom is not None:
+        geometry = pt_geom
+        if hasattr(geometry, "geometry"):
+            geometry = geometry.geometry
+        if hasattr(geometry, "iloc"):
+            if len(geometry) != 1:
+                raise ValueError("pt_geom must contain exactly one point")
+            geometry = geometry.iloc[0]
+        if hasattr(geometry, "geoms") and not hasattr(geometry, "x"):
+            geoms = list(geometry.geoms)
+            if len(geoms) != 1:
+                raise ValueError("pt_geom must contain exactly one point")
+            geometry = geoms[0]
+        try:
+            lon = float(geometry.x)
+            lat = float(geometry.y)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise TypeError("pt_geom must be a point geometry with x/y coordinates") from exc
+
+    if required and (lat is None or lon is None):
+        raise ValueError("Either pt_geom or lat and lon/long must be supplied")
+    return (
+        None if lat is None else float(lat),
+        None if lon is None else float(lon),
+    )
+
 def pull_profile_by_name_alderman(
     soil_name: str,
     lat: Optional[float] = None,
@@ -1262,9 +1302,12 @@ def pull_profile_by_name_alderman(
     STATSGO: bool = False,
     standardize_layers: bool = False,
     log_file: Optional[str] = None,
-    profile_id: Optional[str] = None
+    profile_id: Optional[str] = None,
+    pt_geom=None,
+    long: Optional[float] = None,
 ) -> Optional[dict]:
     """Pull soil profile by name using Alderman SSURGO/STATSGO logic."""
+    lat, lon = _alderman_coordinates(lat, lon, long=long, pt_geom=pt_geom)
     _soil_helper_log(log_file, "INFO", "PULL_BY_NAME", f"Pulling profile by name: {soil_name}")
 
     comp_condition = f"compname IN {_format_in([soil_name])}"
@@ -1327,15 +1370,20 @@ def pull_profile_by_name_alderman(
 
 
 def pull_profile_by_coords_alderman(
-    lat: float,
-    lon: float,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
     site: str = "SITE",
     SSURGO: bool = True,
     STATSGO: bool = False,
     standardize_layers: bool = False,
-    log_file: Optional[str] = None
+    log_file: Optional[str] = None,
+    pt_geom=None,
+    long: Optional[float] = None,
 ) -> Optional[dict]:
     """Pull soil profile by coordinates using Alderman SSURGO/STATSGO logic."""
+    lat, lon = _alderman_coordinates(
+        lat, lon, long=long, pt_geom=pt_geom, required=True
+    )
     _soil_helper_log(log_file, "INFO", "PULL_BY_COORDS", f"Pulling profile by coords: {lat}, {lon}")
 
     wkt = f"POINT({lon} {lat})"

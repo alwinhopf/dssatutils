@@ -1,5 +1,5 @@
 # ==============================================================================
-#  SOIL HELPER: gNATSGO (USDA gridded National Soil Survey) — SMART RESUME
+#  SOIL HELPER: gNATSGO (USDA gridded National Soil Survey) -- SMART RESUME
 #  Filename: soil_gnatsgo.R   (R twin of python/dssatutils/soil_gnatsgo.py)
 # ==============================================================================
 #
@@ -7,19 +7,19 @@
 #  conterminous US (SSURGO + STATSGO2 + Raster Soil Surveys). It has a map unit
 #  EVERYWHERE there is land, filling the "no-coverage" holes plain SSURGO leaves.
 #  Where the underlying map unit is the SSURGO one (most cropland) the profile is
-#  IDENTICAL to SSURGO — this module reuses soil_ssurgo.R's tabular query, soil
+#  IDENTICAL to SSURGO -- this module reuses soil_ssurgo.R's tabular query, soil
 #  physics (Saxton & Rawls) and .SOL layout so the two are byte-comparable there.
 #
 #  ACCESS (two public services, no key):
-#   1. Map-unit key at a point — SoilWeb Web Coverage Service via soilDB::mukey.wcs
+#   1. Map-unit key at a point -- SoilWeb Web Coverage Service via soilDB::mukey.wcs
 #      (same 30 m gNATSGO mukey grid the Python module fetches over raw WCS).
-#   2. Tabular soil properties for that mukey — USDA Soil Data Access (SDA), the
+#   2. Tabular soil properties for that mukey -- USDA Soil Data Access (SDA), the
 #      same endpoint soil_ssurgo.R uses (SDA hosts SSURGO + STATSGO2 tabular).
 #  A few gNATSGO Raster-Soil-Survey mukeys are not in SDA; those are logged as
 #  "no-tabular".
 #
 #  Depends on soil_ssurgo.R being sourced first (robust_SDA_query,
-#  calculate_soil_properties) — guaranteed inside the package namespace.
+#  calculate_soil_properties) -- guaranteed inside the package namespace.
 # ==============================================================================
 
 
@@ -92,7 +92,7 @@ format_dssat_soil_gnatsgo <- function(profile_data, output_dir) {
       slll <- sub("^0", " ", sprintf("%5.3f", layer$SLLL))
       sdul <- sub("^0", " ", sprintf("%5.3f", layer$SDUL))
       ssat <- sub("^0", " ", sprintf("%5.3f", layer$SSAT))
-      depth_format <- ifelse(depth_val < 10, sprintf("%6d", depth_val), sprintf("%5d", depth_val))
+      depth_format <- sprintf("%6d", depth_val)
       cat(sprintf("%s   -99 %s %s %s  1.00   -99 %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
                   depth_format, slll, sdul, ssat,
                   layer$bulk_density, layer$om_pct / 1.724, layer$clay_pct, layer$silt_pct),
@@ -191,7 +191,7 @@ process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_indivi
       if (!has_mu)
         return(fail(sprintf("no-tabular: gNATSGO mukey %s not found in SDA (likely a Raster Soil Survey unit)", mukey)))
       muname <- paste(unique(stats::na.omit(as.data.frame(nm$data)$muname)), collapse = "; ")
-      return(fail(sprintf("no-soil: map unit has no soil horizons%s — typically Water / Urban / Pits / Rock outcrop (mukey %s)",
+      return(fail(sprintf("no-soil: map unit has no soil horizons%s -- typically Water / Urban / Pits / Rock outcrop (mukey %s)",
                           if (nzchar(muname)) sprintf(" [%s]", muname) else "", mukey)))
     }
 
@@ -305,9 +305,9 @@ process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_indivi
     tb <- sort(table(cats), decreasing = TRUE)
     for (nm in names(tb)) message(sprintf("   - %-13s %d   (%s)", paste0(nm, ":"), tb[[nm]],
         switch(nm,
-          "network"     = "transient WCS/SDA/timeout — re-run to retry these",
+          "network"     = "transient WCS/SDA/timeout -- re-run to retry these",
           "no-coverage" = "no gNATSGO map unit here (water / outside CONUS)",
-          "no-soil"     = "non-soil map unit (Water, Urban, Pits, Rock) — no horizons exist",
+          "no-soil"     = "non-soil map unit (Water, Urban, Pits, Rock) -- no horizons exist",
           "no-tabular"  = "gNATSGO mukey not in SDA (Raster Soil Survey unit)",
           "no-layers"   = "horizons present but unusable after depth filtering",
           "other")))
