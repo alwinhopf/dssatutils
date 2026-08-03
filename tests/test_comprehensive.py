@@ -82,7 +82,7 @@ class TestComprehensive(unittest.TestCase):
             "temperature_2m_min": np.random.uniform(5, 15, n),
             "precipitation_sum": np.random.uniform(0, 10, n),
             "shortwave_radiation_sum": np.random.uniform(10, 25, n),
-            "wind_speed_10m_max": np.random.uniform(1, 8, n),
+            "wind_speed_10m_mean": np.random.uniform(1, 8, n),
         })
         mock_df["YEAR"] = dates.year
         mock_df["MM"] = dates.month

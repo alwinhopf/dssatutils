@@ -29,7 +29,7 @@ LUCAS = Europe topsoil; CMFD = China; DWD = Germany; E-OBS = Europe; Xavier = Br
 SILO/SLGA = Australia; PRISM = CONUS; CHELSA-W5E5 / AgMERRA / AgCFSR / HiHydroSoil /
 MSWX / MSWEP / CRU-JRA / TerraClimate / WISE30sec / WoSIS = global or near-global.
 AgMIP/Han = global 5 arc-min DSSAT-ready country `.SOL` files (local download required).
-Newer regional fills: APHRODITE = monsoon Asia rainfall (NASA-POWER hybrid); ANUSPLIN = Canada;
+Newer regional fills: APHRODITE = monsoon Asia rainfall (NASA-POWER hybrid); ANUSPLIN = Canada temperature/precipitation only. ANUSPLIN is intentionally rejected as standalone DSSAT forcing unless an SRAD layer is also supplied, because its core product cannot provide a physically complete WTH file;
 TAMSAT = Africa rainfall (NASA-POWER hybrid); PGF / MERRA-2 = global reanalysis; GHCN-Daily =
 global station obs (live NOAA download, nearest-station). Soil: GSDE = global 1 km 8-layer;
 China BNU = China; FEBR/Embrapa = Brazil; SLC = Canada; ESDB = Europe full profile;

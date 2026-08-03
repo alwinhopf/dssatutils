@@ -27,7 +27,7 @@ import os
 import time
 import logging
 from datetime import date, timedelta
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor as ProcessPoolExecutor, as_completed
 from typing import Union
 
 import numpy as np

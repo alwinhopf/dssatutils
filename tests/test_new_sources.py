@@ -222,6 +222,35 @@ def test_agera5_rejects_unknown_backend_before_network(tmp_path):
         raise AssertionError("unknown AgERA5 backend was accepted")
 
 
+def test_agera5_cache_key_includes_geographic_area(tmp_path, monkeypatch):
+    import dssatutils.weather_agera5 as agera5
+    import zipfile
+
+    destinations = []
+    class Client:
+        def retrieve(self, dataset, request, destination):
+            destinations.append(destination)
+            with zipfile.ZipFile(destination, "w") as archive:
+                archive.writestr("data.nc", b"valid")
+
+    monkeypatch.setattr(agera5, "_make_cds_client", lambda _: Client())
+    monkeypatch.setitem(sys.modules, "cdsapi", type("CDS", (), {})())
+    first = agera5._download_agera5_var(
+        "temperature", None, None, 2010, [42, -94, 40, -92], str(tmp_path))
+    second = agera5._download_agera5_var(
+        "temperature", None, None, 2010, [32, -102, 30, -100], str(tmp_path))
+    assert first != second
+    assert len(destinations) == 2
+
+
+def test_gridded_filename_matching_is_exact_and_multiyear(tmp_path):
+    from dssatutils.weather_gridded_common import find_nc_files
+    for name in ("pr_2001.nc", "pr_2002.nc", "pressure_2001.nc"):
+        (tmp_path / name).write_bytes(b"")
+    found = [os.path.basename(path) for path in find_nc_files(str(tmp_path), ["pr"])]
+    assert found == ["pr_2001.nc", "pr_2002.nc"]
+
+
 def test_agera5_timeseries_backend_writes_weather_file(tmp_path, monkeypatch):
     import dssatutils.weather_agera5 as agera5
 

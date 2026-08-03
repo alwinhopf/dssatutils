@@ -68,3 +68,27 @@ credential setup functions. Each processor writes DSSAT-compatible weather or
 soil files; source-specific arguments and examples are documented in the
 package README.
 }
+\details{
+Weather processors accept point coordinates, a requested calendar period, an
+output directory, column names, worker count, and a log path. They write one
+complete DSSAT \code{.WTH} file per point and fail when required TMAX, TMIN,
+RAIN, or SRAD forcing is incomplete. Soil processors likewise write DSSAT
+\code{.SOL} profiles and mapping tables. Network credentials and source-specific
+local inputs are never inferred from another provider.
+
+R and Python expose the same public source names. See the package README data
+source matrix for coverage, credentials, optional dependencies, cache behavior,
+and complete call examples.
+}
+\value{
+Processors write DSSAT input files and return source-specific metadata or an
+invisible completion value. Quality-audit functions return structured issue
+summaries; credential setup returns the effective CDS credential path and URL.
+}
+\examples{
+\dontrun{
+setup_cds_credentials(prompt = TRUE)
+process_weather_openmeteo(points, 2001, 2002, "weather",
+  "ID", "LAT", "LONG", 2, "weather_errors.log")
+}
+}

@@ -99,7 +99,7 @@ def _openmeteo_frame(year: int = YEAR):
         "temperature_2m_min": np.full(len(dates), 15.0),
         "precipitation_sum": np.full(len(dates), 1.0),
         "shortwave_radiation_sum": np.full(len(dates), 18.0),
-        "wind_speed_10m_max": np.full(len(dates), 3.0),
+        "wind_speed_10m_mean": np.full(len(dates), 3.0),
         "YEAR": dates.year,
         "MM": dates.month,
         "DOY": dates.dayofyear,
@@ -264,15 +264,6 @@ LOCAL_NETCDF_WEATHER = [
             "swgdn_test.nc": ("swgdn", 200.0, "W m-2"),
         },
     ),
-    (
-        "process_weather_anusplin",
-        "anusplin_nc_dir",
-        {
-            "maxt_test.nc": ("maxt", 25.0, "degC"),
-            "mint_test.nc": ("mint", 12.0, "degC"),
-            "pcp_test.nc": ("pcp", 2.0, "mm"),
-        },
-    ),
 ]
 
 
@@ -296,6 +287,23 @@ def test_local_netcdf_weather_entrypoints(func_name, dir_arg, files, tmp_path):
         **{dir_arg: str(nc_dir)},
     )
     _assert_wth(out_dir / "SRC1.WTH")
+
+
+def test_anusplin_refuses_incomplete_standalone_forcing(tmp_path):
+    """Core ANUSPLIN lacks solar radiation and must not emit a runnable WTH."""
+    import dssatutils
+
+    nc_dir = tmp_path / "nc"
+    _write_weather_set(nc_dir, {
+        "maxt_test.nc": ("maxt", 25.0, "degC"),
+        "mint_test.nc": ("mint", 12.0, "degC"),
+        "pcp_test.nc": ("pcp", 2.0, "mm"),
+    })
+    with pytest.raises(FileNotFoundError, match="requires SRAD"):
+        dssatutils.process_weather_anusplin(
+            POINTS, YEAR, YEAR, str(tmp_path / "wth"), "ID", "LAT", "LONG", 1,
+            str(tmp_path / "weather.log"), anusplin_nc_dir=str(nc_dir),
+        )
 
 
 def test_process_weather_eobs_entrypoint(tmp_path):

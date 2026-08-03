@@ -15,7 +15,11 @@
 from __future__ import annotations
 
 import os
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Preserve the established local name while using threads for network-bound
+# point requests. This also makes injected offline transports deterministic.
+ProcessPoolExecutor = ThreadPoolExecutor
 from datetime import date, timedelta
 from typing import Literal
 from urllib.parse import urlparse

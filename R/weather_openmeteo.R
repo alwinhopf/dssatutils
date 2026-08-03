@@ -19,7 +19,7 @@
 process_weather_openmeteo <- function(shapefile, start_year, end_year, output_dir,
                                       id_col, lat_col, lon_col, n_cores, log_file) {
 
-  message(sprintf("--- Starting Open-Meteo (ERA5) Download (Years: %d-%d) ---",
+  message(sprintf("--- Starting Open-Meteo (ERA5-Land) Download (Years: %d-%d) ---",
                   start_year, end_year))
 
   start_date_str <- paste0(start_year, "-01-01")
@@ -33,7 +33,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
 
   daily_vars <- paste(c("temperature_2m_max", "temperature_2m_min",
                         "precipitation_sum", "shortwave_radiation_sum",
-                        "wind_speed_10m_max"), collapse = ",")
+                        "wind_speed_10m_mean"), collapse = ",")
 
   if (n_cores > 1) {
     message(sprintf(
@@ -103,6 +103,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
                        query = list(latitude = latitude, longitude = longitude,
                                     start_date = start_date_str, end_date = end_date_str,
                                     daily = daily_vars, windspeed_unit = "ms",
+                                    models = "era5_land",
                                     timezone = "UTC"),
                        httr::timeout(180))
         last_status <- httr::status_code(r)
@@ -149,7 +150,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
         TMAX = daily$temperature_2m_max,
         TMIN = daily$temperature_2m_min,
         RAIN = daily$precipitation_sum,
-        WIND = daily$wind_speed_10m_max * .OMET_WIND_10M_TO_2M,
+        WIND = daily$wind_speed_10m_mean * .OMET_WIND_10M_TO_2M,
         TDEW = -99,   # Open-Meteo has no daily dewpoint
         RH2M = -99    # ... or daily RH
       )
@@ -167,7 +168,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
       amp <- mean(annual$AMP_YR, na.rm = TRUE)
 
       wth_header <- sprintf(
-        "$WEATHER DATA: OPEN-METEO ERA5 (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  OMET %8.4f %8.4f   -99 %5.1f %5.1f   2.0   2.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+        "$WEATHER DATA: OPEN-METEO ERA5-LAND (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  OMET %8.4f %8.4f   -99 %5.1f %5.1f   2.0   2.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
         point_id, latitude, longitude, tav, amp)
 
       # Guard against values that would overflow a %6.1f field and shift every

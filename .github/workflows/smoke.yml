@@ -29,13 +29,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest numpy pandas xarray netCDF4 geopandas shapely requests pyyaml sqlite-utils
 
-      - name: Run Python comprehensive tests
+      - name: Run complete Python offline suite
         run: |
-          python -m pytest tests/test_comprehensive.py -v
-
-      - name: Run Python smoke tests
-        run: |
-          python -m pytest tests/test_smoke.py -v
+          python -m pytest tests -v
 
   r-tests:
     runs-on: ubuntu-latest

@@ -20,7 +20,9 @@ import math
 import time
 import logging
 from datetime import date, timedelta
-from concurrent.futures import ProcessPoolExecutor, as_completed
+# HTTP-bound work is better served by threads; the legacy local name remains a
+# stable monkeypatch seam for downstream offline tests.
+from concurrent.futures import ThreadPoolExecutor as ProcessPoolExecutor, as_completed
 
 import pandas as pd
 import requests
@@ -40,7 +42,7 @@ _DAILY_VARS = [
     "temperature_2m_min",          # degC
     "precipitation_sum",           # mm
     "shortwave_radiation_sum",     # MJ/m2  (DSSAT SRAD)
-    "wind_speed_10m_max",          # m/s (windspeed_unit=ms)
+    "wind_speed_10m_mean",         # m/s daily mean (windspeed_unit=ms)
 ]
 
 # Log-wind-profile factor to convert 10 m wind to 2 m (FAO-56):
@@ -78,6 +80,7 @@ def _fetch_open_meteo(lat: float, lon: float, start: str, end: str,
         "daily": ",".join(_DAILY_VARS),
         "windspeed_unit": "ms",
         "timezone": "UTC",
+        "models": "era5_land",
     }
     for attempt in range(retries):
         try:
@@ -124,7 +127,7 @@ def _process_single_point(args: dict) -> None:
             "temperature_2m_max": "TMAX",
             "temperature_2m_min": "TMIN",
             "precipitation_sum": "RAIN",
-            "wind_speed_10m_max": "WIND",
+            "wind_speed_10m_mean": "WIND",
         })
         # 10 m -> 2 m wind adjustment.
         df["WIND"] = df["WIND"] * _WIND_10M_TO_2M
@@ -139,7 +142,7 @@ def _process_single_point(args: dict) -> None:
         amp = _calc_amp(df)
 
         header = (
-            f"$WEATHER DATA: OPEN-METEO ERA5 (Point ID: {pid})\n"
+            f"$WEATHER DATA: OPEN-METEO ERA5-LAND (Point ID: {pid})\n"
             f"@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n"
             f"  OMET {lat:8.4f} {lon:8.4f}   -99 {tav:5.1f} {amp:5.1f}   2.0   2.0\n"
             f"@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND"
@@ -182,7 +185,7 @@ def process_weather_openmeteo(shapefile, start_year, end_year, output_dir,
     else:
         end_date = f"{end_year}-12-31"
 
-    print(f"--- Starting Open-Meteo (ERA5) Download (Years: {start_year}-{end_year}) ---")
+    print(f"--- Starting Open-Meteo (ERA5-Land) Download (Years: {start_year}-{end_year}) ---")
     print(f"Registered {n_cores} cores for parallel Open-Meteo download.")
     os.makedirs(output_dir, exist_ok=True)
 

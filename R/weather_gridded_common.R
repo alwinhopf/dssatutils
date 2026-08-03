@@ -51,12 +51,18 @@ weather_write_wth <- function(df, pid, lat, lon, output_dir, source_label,
   writeLines(c(header, lines), file.path(output_dir, sprintf("%s.WTH", pid)))
 }
 
-weather_find_nc_file <- function(nc_dir, tokens) {
-  if (!nzchar(nc_dir) || !dir.exists(nc_dir)) return(NA_character_)
+weather_find_nc_files <- function(nc_dir, tokens) {
+  if (!nzchar(nc_dir) || !dir.exists(nc_dir)) return(character())
   files <- list.files(nc_dir, pattern = "\\.nc$", full.names = TRUE)
-  base <- tolower(basename(files))
-  hit <- Reduce(`|`, lapply(tolower(tokens), function(t) grepl(t, base, fixed = TRUE)))
-  if (any(hit)) files[which(hit)[1]] else NA_character_
+  stems <- tolower(tools::file_path_sans_ext(basename(files)))
+  components <- strsplit(stems, "[^a-z0-9]+")
+  hit <- vapply(components, function(parts) any(tolower(tokens) %in% parts), logical(1))
+  files[hit]
+}
+
+weather_find_nc_file <- function(nc_dir, tokens) {
+  files <- weather_find_nc_files(nc_dir, tokens)
+  if (length(files)) files[1] else NA_character_
 }
 
 weather_extract_netcdf_series <- function(path, ids, pts_vect, start_year, end_year, kind) {
@@ -95,13 +101,18 @@ process_local_netcdf_weather <- function(shapefile, start_year, end_year, output
   per_var <- list()
   for (v in names(var_specs)) {
     spec <- var_specs[[v]]
-    path <- weather_find_nc_file(nc_dir, spec$tokens)
-    if (is.na(path)) {
+    paths <- weather_find_nc_files(nc_dir, spec$tokens)
+    if (!length(paths)) {
       if (isTRUE(spec$required)) stop(sprintf("%s required variable %s not found in %s", source_label, v, nc_dir))
       message(sprintf("  %s: no NetCDF for %s; writing -99 where needed.", source_label, v))
       next
     }
-    per_var[[v]] <- weather_extract_netcdf_series(path, ids, pts_vect, start_year, end_year, spec$kind)
+    per_var[[v]] <- weather_extract_netcdf_series(paths, ids, pts_vect, start_year, end_year, spec$kind)
+  }
+  missing_forcing <- setdiff(c("TMAX", "TMIN", "RAIN", "SRAD"), names(per_var))
+  if (length(missing_forcing)) {
+    stop(sprintf("%s requires %s; refusing to write WTH with missing forcing",
+                 source_label, paste(missing_forcing, collapse = ", ")), call. = FALSE)
   }
   written <- 0
   for (k in seq_along(ids)) {
@@ -111,6 +122,14 @@ process_local_netcdf_weather <- function(shapefile, start_year, end_year, output
       tmin <- per_var[["TMIN"]][[pid]]
       if (is.null(tmax) || !length(tmax) || is.null(tmin)) stop("No required TMAX/TMIN series extracted.")
       dates <- names(tmax)
+      expected_end <- as.Date(sprintf("%d-12-31", end_year))
+      if (end_year == as.integer(format(Sys.Date(), "%Y"))) expected_end <- Sys.Date()
+      expected <- format(seq(as.Date(sprintf("%d-01-01", start_year)), expected_end, by = "day"), "%Y%j")
+      for (required in c("TMAX", "TMIN", "RAIN", "SRAD")) {
+        actual <- names(per_var[[required]][[pid]])
+        missing <- setdiff(expected, actual)
+        if (length(missing)) stop(sprintf("%s incomplete (%d missing day(s))", required, length(missing)))
+      }
       grab <- function(v) { s <- per_var[[v]][[pid]]; if (is.null(s)) rep(NA_real_, length(dates)) else as.numeric(s[dates]) }
       df <- data.frame(DATE = dates, YEAR = as.integer(substr(dates, 1, 4)),
                        MM = as.integer(format(as.Date(dates, "%Y%j"), "%m")),

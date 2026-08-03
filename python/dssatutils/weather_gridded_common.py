@@ -2,6 +2,7 @@
 
 import glob
 import os
+import re
 from datetime import date
 
 import numpy as np
@@ -60,15 +61,23 @@ def write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
     return out
 
 
-def find_nc_file(nc_dir: str, tokens) -> Optional[str]:
+def find_nc_files(nc_dir: str, tokens) -> list[str]:
     if not nc_dir or not os.path.isdir(nc_dir):
-        return None
-    tokens = [t.lower() for t in tokens]
+        return []
+    tokens = [str(t).lower() for t in tokens]
+    matches = []
     for f in sorted(glob.glob(os.path.join(nc_dir, "*.nc"))):
-        base = os.path.basename(f).lower()
-        if any(t in base for t in tokens):
-            return f
-    return None
+        stem = os.path.splitext(os.path.basename(f).lower())[0]
+        components = set(filter(None, re.split(r"[^a-z0-9]+", stem)))
+        if any(t in components or stem == t for t in tokens):
+            matches.append(f)
+    return matches
+
+
+def find_nc_file(nc_dir: str, tokens) -> Optional[str]:
+    """Compatibility wrapper returning the first exact-token match."""
+    matches = find_nc_files(nc_dir, tokens)
+    return matches[0] if matches else None
 
 
 def _pick_var(ds, aliases):
@@ -116,12 +125,15 @@ def convert_units(values, units: str, kind: str):
     return arr
 
 
-def extract_netcdf_series(path: str, aliases, ids, lats, lons,
+def extract_netcdf_series(path, aliases, ids, lats, lons,
                           start_year: int, end_year: int, kind: str) -> dict:
     import xarray as xr
 
     out = {pid: {} for pid in ids}
-    with xr.open_dataset(path) as ds:
+    paths = [path] if isinstance(path, (str, os.PathLike)) else list(path)
+    datasets = [xr.open_dataset(p) for p in paths]
+    try:
+        ds = xr.concat(datasets, dim="time").sortby("time") if len(datasets) > 1 else datasets[0]
         var = _pick_var(ds, aliases)
         latname, lonname = _coord_names(ds)
         if var is None or latname is None or lonname is None or "time" not in ds.coords:
@@ -152,6 +164,9 @@ def extract_netcdf_series(path: str, aliases, ids, lats, lons,
             col = vals[:, j]
             good = np.isfinite(col)
             out[pid].update({dc: float(v) for dc, v, g in zip(date_codes, col, good) if g})
+    finally:
+        for dataset in datasets:
+            dataset.close()
     return out
 
 
@@ -175,15 +190,21 @@ def process_local_netcdf_weather(shapefile, start_year, end_year, output_dir,
 
     per_var = {}
     for dssat_var, spec in var_specs.items():
-        path = find_nc_file(nc_dir, spec["tokens"])
-        if not path:
+        paths = find_nc_files(nc_dir, spec["tokens"])
+        if not paths:
             if spec.get("required", False):
                 raise FileNotFoundError(f"{source_label} required variable {dssat_var} not found in {nc_dir}")
             print(f"  {source_label}: no NetCDF for {dssat_var}; writing -99 where needed.")
             continue
         per_var[dssat_var] = extract_netcdf_series(
-            path, spec.get("aliases", spec["tokens"]), ids, lats, lons,
+            paths, spec.get("aliases", spec["tokens"]), ids, lats, lons,
             start_year, end_year, spec["kind"])
+
+    for required in ("TMAX", "TMIN", "RAIN", "SRAD"):
+        if required not in per_var:
+            raise FileNotFoundError(
+                f"{source_label} requires {required}; refusing to write a WTH with missing forcing"
+            )
 
     written = 0
     for pid, lat, lon in zip(ids, lats, lons):
@@ -191,8 +212,18 @@ def process_local_netcdf_weather(shapefile, start_year, end_year, output_dir,
             cols = {}
             for dssat_var in var_specs:
                 cols[dssat_var] = pd.Series(per_var.get(dssat_var, {}).get(pid, {}), dtype="float64")
-            if cols.get("TMAX", pd.Series(dtype=float)).empty or cols.get("TMIN", pd.Series(dtype=float)).empty:
-                raise ValueError("No required TMAX/TMIN series extracted for this point.")
+            expected_end = pd.Timestamp(end_year, 12, 31)
+            if end_year == date.today().year:
+                expected_end = pd.Timestamp(date.today())
+            expected = {f"{d.year}{d.dayofyear:03d}" for d in
+                        pd.date_range(pd.Timestamp(start_year, 1, 1), expected_end, freq="D")}
+            for required in ("TMAX", "TMIN", "RAIN", "SRAD"):
+                actual = set(cols[required].dropna().index.astype(str))
+                missing = expected - actual
+                if missing:
+                    raise ValueError(
+                        f"{required} is incomplete for requested period ({len(missing)} missing day(s))"
+                    )
             frame = pd.DataFrame(cols)
             frame.index.name = "DATE"
             frame = frame.reset_index()

@@ -49,9 +49,13 @@ AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG <- 4.5
 AGERA5_TIMESERIES_PAD_DEG <- 0.2
 
 .agera5_data_files <- function(nc_path, zip_path, unzip_dir) {
-  if (file.exists(nc_path)) return(nc_path)
+  if (file.exists(nc_path) && file.info(nc_path)$size > 0) return(nc_path)
 
   if (file.exists(zip_path)) {
+    listing <- try(utils::unzip(zip_path, list = TRUE), silent = TRUE)
+    valid <- !inherits(listing, "try-error") && nrow(listing) > 0 &&
+      any(grepl("\\.nc$", listing$Name, ignore.case = TRUE) & listing$Length > 0)
+    if (!valid) return(character())
     dir.create(unzip_dir, recursive = TRUE, showWarnings = FALSE)
     nc_files <- list.files(unzip_dir, pattern = "\\.nc$", full.names = TRUE)
     if (!length(nc_files)) {
@@ -88,7 +92,8 @@ AGERA5_CDS_REQUEST_CAP <- 4L
 }
 
 .agera5_job <- function(vname, yr, spec, area, agera5_cache_dir) {
-  tag <- sprintf("%s_%s_%d", spec$var, ifelse(is.na(spec$sel), "na", spec$sel), yr)
+  area_tag <- paste(vapply(area, .agera5_slug_float, character(1)), collapse = "_")
+  tag <- sprintf("%s_%s_%d_%s", spec$var, ifelse(is.na(spec$sel), "na", spec$sel), yr, area_tag)
   list(
     vname = vname,
     yr = yr,
@@ -111,11 +116,13 @@ AGERA5_CDS_REQUEST_CAP <- 4L
 
   .agera5_ensure_ecmwfr_key(quiet = TRUE)
 
+  partial <- paste0(job$zip_dest, ".partial")
+  if (file.exists(partial)) unlink(partial)
   req <- list(dataset_short_name = "sis-agrometeorological-indicators",
               variable = job$spec$var, year = as.character(job$yr),
               month = sprintf("%02d", 1:12), day = sprintf("%02d", 1:31),
               area = job$area, version = "2_0",
-              target = basename(job$zip_dest))
+              target = basename(partial))
   if (!is.na(job$spec$sel_kind)) req[[job$spec$sel_kind]] <- job$spec$sel
 
   err <- NULL
@@ -123,6 +130,13 @@ AGERA5_CDS_REQUEST_CAP <- 4L
     ecmwfr::wf_request(request = req, path = job$cache_dir),
     error = function(e) err <<- conditionMessage(e)
   )
+  partial_files <- .agera5_data_files("", partial, paste0(job$unzip_dir, ".partial"))
+  if (length(partial_files)) {
+    if (!file.rename(partial, job$zip_dest)) {
+      err <- "download completed but atomic cache rename failed"
+    }
+    unlink(paste0(job$unzip_dir, ".partial"), recursive = TRUE)
+  }
   data_files <- .agera5_data_files(job$nc_dest, job$zip_dest, job$unzip_dir)
   if (length(data_files)) {
     return(list(ok = TRUE, cached = FALSE, job = job, data_files = data_files,
@@ -200,22 +214,30 @@ AGERA5_CDS_REQUEST_CAP <- 4L
   bounds <- .agera5_date_bounds_for_year(job$year)
   if (is.null(bounds)) return(NULL)
   dest <- .agera5_timeseries_cache_path(job$cache_dir, job$year, job$area, data_format)
-  if (file.exists(dest) && file.info(dest)$size > 0) return(dest)
+  valid_csv <- function(path) {
+    if (!file.exists(path) || file.info(path)$size <= 0) return(FALSE)
+    x <- try(utils::read.csv(path, nrows = 5, check.names = FALSE), silent = TRUE)
+    !inherits(x, "try-error") && nrow(x) > 0 &&
+      all(c("valid_time", "latitude", "longitude") %in% tolower(names(x)))
+  }
+  if (valid_csv(dest)) return(dest)
 
+  partial <- paste0(dest, ".partial")
+  if (file.exists(partial)) unlink(partial)
   req <- list(
     dataset_short_name = "sis-agrometeorological-indicators-timeseries",
     variable = vapply(.agera5_timeseries_vars, `[[`, character(1), "var"),
     date = unname(bounds),
     data_format = data_format,
     area = as.numeric(job$area),
-    target = basename(dest)
+    target = basename(partial)
   )
   err <- NULL
   tryCatch(
     ecmwfr::wf_request(request = req, path = job$cache_dir),
     error = function(e) err <<- conditionMessage(e)
   )
-  if (file.exists(dest) && file.info(dest)$size > 0) return(dest)
+  if (valid_csv(partial) && file.rename(partial, dest)) return(dest)
   message(sprintf("  AgERA5 time-series download failed (%d, area=%s): %s",
                   job$year, paste(job$area, collapse = ","),
                   if (is.null(err)) "no data file returned" else err))

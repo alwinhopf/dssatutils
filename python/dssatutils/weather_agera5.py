@@ -121,9 +121,10 @@ def _download_agera5_var(cds_var: str, sel_kind, sel_value, year: int,
     """
     import cdsapi  # imported lazily so the module loads without the key/pkg
 
-    tag = f"{cds_var}_{sel_value or 'na'}_{year}"
+    area_tag = "_".join(_slug_float(v) for v in area)
+    tag = f"{cds_var}_{sel_value or 'na'}_{year}_{area_tag}"
     dest = os.path.join(cache_dir, f"agera5_{tag}.zip")
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+    if _valid_agera5_download(dest):
         return dest
 
     req = {
@@ -138,11 +139,31 @@ def _download_agera5_var(cds_var: str, sel_kind, sel_value, year: int,
         req[sel_kind] = sel_value   # "statistic": "24_hour_mean"  or  "time": "15_00"
 
     try:
-        _make_cds_client(cdsapi).retrieve(_CDS_DATASET, req, dest)
-        return dest if os.path.exists(dest) else None
+        partial = dest + ".partial"
+        if os.path.exists(partial):
+            os.remove(partial)
+        _make_cds_client(cdsapi).retrieve(_CDS_DATASET, req, partial)
+        if not _valid_agera5_download(partial):
+            raise ValueError("CDS response is not a valid, non-empty AgERA5 archive")
+        os.replace(partial, dest)
+        return dest
     except Exception as exc:  # noqa: BLE001
         print(f"  AgERA5 download failed ({tag}): {exc}")
         return None
+
+
+def _valid_agera5_download(path: str) -> bool:
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return False
+    if path.endswith((".zip", ".partial")):
+        try:
+            with zipfile.ZipFile(path) as archive:
+                members = [m for m in archive.infolist()
+                           if not m.is_dir() and m.filename.lower().endswith(".nc")]
+                return bool(members) and all(m.file_size > 0 for m in members)
+        except (OSError, zipfile.BadZipFile):
+            return False
+    return True
 
 
 def _open_agera5(path: str):
@@ -254,7 +275,7 @@ def _download_agera5_timeseries(year: int, area, cache_dir: str,
     if bounds is None:
         return None
     dest = _agera5_timeseries_cache_path(cache_dir, year, area, data_format)
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+    if _valid_agera5_timeseries_csv(dest):
         return dest
 
     import cdsapi  # imported lazily so the module loads without the key/pkg
@@ -266,11 +287,28 @@ def _download_agera5_timeseries(year: int, area, cache_dir: str,
         "area": list(area),
     }
     try:
-        _make_cds_client(cdsapi).retrieve(_CDS_TIMESERIES_DATASET, req, dest)
-        return dest if os.path.exists(dest) and os.path.getsize(dest) > 0 else None
+        partial = dest + ".partial"
+        if os.path.exists(partial):
+            os.remove(partial)
+        _make_cds_client(cdsapi).retrieve(_CDS_TIMESERIES_DATASET, req, partial)
+        if not _valid_agera5_timeseries_csv(partial):
+            raise ValueError("CDS response is not a valid AgERA5 time-series CSV")
+        os.replace(partial, dest)
+        return dest
     except Exception as exc:  # noqa: BLE001
         print(f"  AgERA5 time-series download failed ({year}, area={area}): {exc}")
         return None
+
+
+def _valid_agera5_timeseries_csv(path: str) -> bool:
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return False
+    try:
+        sample = pd.read_csv(path, nrows=5)
+    except Exception:  # noqa: BLE001
+        return False
+    required = {"valid_time", "latitude", "longitude"}
+    return bool(len(sample)) and required.issubset({str(c).lower() for c in sample.columns})
 
 
 def _find_timeseries_column(df: pd.DataFrame, expected: str) -> str:
