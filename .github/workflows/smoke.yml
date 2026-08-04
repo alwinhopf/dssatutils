@@ -34,7 +34,12 @@ jobs:
           python -m pytest tests -v
 
   r-tests:
-    runs-on: ubuntu-latest
+    name: R (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -43,14 +48,20 @@ jobs:
           use-public-rspm: true
 
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgdal-dev libgeos-dev libproj-dev libudunits2-dev libsqlite3-dev
 
       - name: Install R package dependencies
-        run: |
-          Rscript -e 'install.packages(c("pkgload", "testthat", "daymetr", "nasapower", "soilDB", "sf", "terra", "ncdf4", "httr", "jsonlite", "dplyr", "tidyr", "stringr", "readr", "lubridate", "foreach", "doParallel", "pbapply", "DSSAT", "DBI", "RSQLite", "yaml"))'
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          dependencies: '"hard"'
+          extra-packages: any::pkgload, any::testthat, any::ncdf4, any::DBI, any::RSQLite
+          install-pandoc: false
 
       - name: Run R tests
+        shell: Rscript {0}
         run: |
-          Rscript -e "pkgload::load_all(); testthat::test_dir('tests/testthat')"
+          pkgload::load_all('.', quiet = TRUE)
+          testthat::test_dir('tests/testthat', reporter = 'summary', stop_on_failure = TRUE)
