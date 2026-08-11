@@ -59,19 +59,19 @@ rainfall over the overlapping period.
 ### R
 ```r
 # install.packages("remotes")
-remotes::install_github("alwinhopf/dssatutils@v0.4.0")
+remotes::install_github("alwinhopf/dssatutils@e9c859fa1d915623df23e2eb13084cb085dbfe3e")
 library(dssatutils)
 ```
 
 ### Python
 ```bash
-pip install "git+https://github.com/alwinhopf/dssatutils.git@v0.4.0"
+pip install "git+https://github.com/alwinhopf/dssatutils.git@e9c859fa1d915623df23e2eb13084cb085dbfe3e"
 # CDS-backed weather sources: AgERA5, ERA5-Land, optional E-OBS CDS mode.
-pip install "dssatutils[cds] @ git+https://github.com/alwinhopf/dssatutils.git@v0.4.0"
+pip install "dssatutils[cds] @ git+https://github.com/alwinhopf/dssatutils.git@e9c859fa1d915623df23e2eb13084cb085dbfe3e"
 ```
 or pin in `requirements.txt`:
 ```
-dssatutils @ git+https://github.com/alwinhopf/dssatutils.git@v0.4.0
+dssatutils @ git+https://github.com/alwinhopf/dssatutils.git@e9c859fa1d915623df23e2eb13084cb085dbfe3e
 ```
 
 ```python

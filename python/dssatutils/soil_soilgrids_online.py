@@ -425,10 +425,13 @@ def process_soils_soilgrids_online(
 
     # Join coordinates back
     coords_df = grid_wgs84[[id_col, "lon_wgs84", "lat_wgs84"]].rename(
-        columns={"lon_wgs84": "longitude", "lat_wgs84": "latitude"}
+        columns={
+            id_col: "ID",
+            "lon_wgs84": "longitude",
+            "lat_wgs84": "latitude",
+        }
     )
-    final_df = processed_df.merge(coords_df, on=id_col, how="inner")
-    final_df = final_df.rename(columns={id_col: "ID"})
+    final_df = processed_df.merge(coords_df, on="ID", how="inner")
 
     # -----------------------------------------------------------------------
     # Write outputs

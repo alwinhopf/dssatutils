@@ -354,6 +354,39 @@ def test_ssks_passthrough_in_sol_writer():
     assert " 12.3 " not in without, "texture fallback should not equal source SSKS"
 
 
+def test_soilgrids_online_accepts_custom_id_column(tmp_path, monkeypatch):
+    """The internal canonical ID must not leak into the public id_col join."""
+    try:
+        import geopandas as gpd
+        from shapely.geometry import Point
+    except ImportError:
+        return
+
+    from dssatutils import soil_soilgrids_online as sg
+
+    rows = []
+    values = {"clay": 200, "sand": 400, "silt": 400, "soc": 150,
+              "bdod": 130, "cfvo": 10}
+    for prop, value in values.items():
+        rows.append({"prop": prop, "depth_label": "0-5cm", "depth_bottom": 5,
+                     "depth_center": 2.5, "value": value})
+
+    monkeypatch.setattr(sg, "USE_REST_API", True)
+    monkeypatch.setattr(sg, "_fetch_soilgrids_rest",
+                        lambda lat, lon: pd.DataFrame(rows))
+    points = gpd.GeoDataFrame(
+        {"point_id": ["CUSTOM_1"]}, geometry=[Point(-90.0, 40.0)], crs="EPSG:4326"
+    )
+    mapping = tmp_path / "soil_map.csv"
+    sol_dir = tmp_path / "sol"
+
+    sg.process_soils_soilgrids_online(points, str(mapping), str(sol_dir), "point_id")
+
+    result = pd.read_csv(mapping)
+    assert result.loc[0, "point_id"] == "CUSTOM_1"
+    assert (sol_dir / "CUSTOM_1.SOL").is_file()
+
+
 def test_terraclimate_monthly_disaggregated_to_daily():
     """A 12-month synthetic TerraClimate NetCDF expands to continuous daily rows."""
     xr = pytest_importorskip_xarray()
