@@ -8,6 +8,8 @@
 # REST API docs: https://rest.isric.org/soilgrids/v2.0/
 # VRT data root: https://files.isric.org/soilgrids/latest/data/
 
+from __future__ import annotations
+
 import os
 import re
 import time
