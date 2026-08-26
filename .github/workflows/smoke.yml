@@ -1,7 +1,7 @@
 name: smoke
 
-# Offline smoke test: no internet APIs, no DSSAT executable required.
-# Validates config loading, helper-module imports, and the DSSAT .WTH writer.
+# Core suites are offline. A small dedicated POLARIS integration job additionally
+# samples one known public raster to catch GDAL/terra/network-path regressions.
 
 on:
   push:
@@ -28,8 +28,6 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install the src-layout package itself so every test—including
-          # module-level imports in skipped live tests—uses the public API.
           python -m pip install -e ".[dev]"
 
       - name: Run complete Python offline suite
@@ -63,8 +61,42 @@ jobs:
           extra-packages: any::pkgload, any::testthat, any::ncdf4, any::DBI, any::RSQLite
           install-pandoc: false
 
-      - name: Run R tests
+      - name: Run R offline tests
         shell: Rscript {0}
+        env:
+          RUN_POLARIS_LIVE: "false"
         run: |
           pkgload::load_all('.', quiet = TRUE)
           testthat::test_dir('tests/testthat', reporter = 'summary', stop_on_failure = TRUE)
+
+  polaris-live-r:
+    name: POLARIS live R (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libgeos-dev libproj-dev libudunits2-dev libsqlite3-dev
+
+      - name: Install R package dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          dependencies: '"hard"'
+          extra-packages: any::pkgload, any::testthat, any::ncdf4, any::DBI, any::RSQLite
+          install-pandoc: false
+
+      - name: Sample live POLARIS raster
+        shell: Rscript {0}
+        env:
+          RUN_POLARIS_LIVE: "true"
+          POLARIS_TIMEOUT_SEC: "30"
+          POLARIS_RETRIES: "2"
+        run: |
+          pkgload::load_all('.', quiet = TRUE)
+          testthat::test_file('tests/testthat/test_polaris_live.R', reporter = 'summary', stop_on_failure = TRUE)
