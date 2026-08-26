@@ -4,42 +4,22 @@
 #  Description: R twin of python/dssatutils/soil_polaris.py. Streams POLARIS
 #    GeoTIFF tiles via GDAL /vsicurl (terra), derives DSSAT soil physics from
 #    POLARIS's van Genuchten retention curve, and writes per-point .SOL files.
-#
-#  Tier-0 deterministic drop-in: one profile per point from a single statistic
-#  layer (default median, "p50"). p5/p95 percentile uncertainty is out of scope
-#  here; the `stat` argument is the seam for a later ensemble layer.
-#
-#  References:
-#    Chaney et al. (2016) Geoderma 274:54-67
-#    Chaney et al. (2019) Water Resour. Res. 55:2916-2938
-#  Data root (keyless): http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-#  0. Product layout & units
-# ------------------------------------------------------------------------------
 POLARIS_BASE <- "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0"
 
 .polaris_vars   <- c("clay", "sand", "silt", "bd", "om", "ph",
                      "theta_r", "theta_s", "alpha", "n", "ksat")
-.polaris_log10  <- c("om", "alpha", "ksat", "hb")  # stored as log10(value)
+.polaris_log10  <- c("om", "alpha", "ksat", "hb")
 .polaris_dlabel <- c("0_5", "5_15", "15_30", "30_60", "60_100", "100_200")
 .polaris_dbot   <- c(5, 15, 30, 60, 100, 200)
 .polaris_dctr   <- c(2.5, 10, 22.5, 45, 80, 150)
 
-# Matric potentials (kPa) for DUL / LL on the VG curve; alpha is kPa^-1 so psi
-# must be in kPa. If a future POLARIS release uses cm^-1 for alpha, convert these
-# to cm head (1 kPa ~ 10.2 cm) -- the #1 units gotcha.
 PSI_DUL_KPA <- 33
 PSI_LL_KPA  <- 1500
-
-# Crash guards (match soil_soilgrids_online / soil_ssurgo).
 .LL_FLOOR <- 0.02
 .PAW_MIN  <- 0.04
 
-# ------------------------------------------------------------------------------
-#  1. Tile addressing & value transforms (pure)
-# ------------------------------------------------------------------------------
 polaris_tile <- function(lat, lon) {
   s <- floor(lat); w <- floor(lon)
   sprintf("lat%d%d_lon%d%d", s, s + 1L, w, w + 1L)
@@ -51,14 +31,12 @@ polaris_backtransform <- function(var, value) {
 }
 
 vg_theta <- function(psi_kpa, theta_r, theta_s, alpha, n) {
-  # van Genuchten (1980); alpha already back-transformed to kPa^-1.
   if (is.na(n) || n <= 1 || any(is.na(c(theta_r, theta_s, alpha)))) return(NA_real_)
   m <- 1 - 1 / n
   theta_r + (theta_s - theta_r) / (1 + (alpha * abs(psi_kpa))^n)^m
 }
 
 saxton_rawls <- function(sand_pct, clay_pct, om_pct) {
-  # Saxton & Rawls (2006) fallback (identical to soil_soilgrids_online.R).
   S <- sand_pct / 100; C <- clay_pct / 100; OM <- om_pct / 100
   t1500 <- -0.024*S + 0.487*C + 0.006*OM + 0.005*S*OM - 0.013*C*OM + 0.068*S*C + 0.031
   lll <- t1500 + (0.14 * t1500 - 0.02)
@@ -72,21 +50,16 @@ saxton_rawls <- function(sand_pct, clay_pct, om_pct) {
 
 water_limits <- function(theta_r, theta_s, alpha, n,
                          sand = NA, clay = NA, om_pct = NA) {
-  # DSSAT SLLL/SDUL/SSAT from the POLARIS VG curve, Saxton-Rawls fallback,
-  # plus ordering/PAW guards DSSAT requires (else IPSOIL / water-balance crash).
   lll <- vg_theta(PSI_LL_KPA, theta_r, theta_s, alpha, n)
   dul <- vg_theta(PSI_DUL_KPA, theta_r, theta_s, alpha, n)
   sat <- if (is.na(theta_s)) NA_real_ else theta_s
-
   if (any(is.na(c(lll, dul, sat)))) {
     if (!any(is.na(c(sand, clay, om_pct)))) {
       sr <- saxton_rawls(sand, clay, om_pct)
       if (is.na(lll)) lll <- sr$SLLL
       if (is.na(dul)) dul <- sr$SDUL
       if (is.na(sat)) sat <- sr$SSAT
-    } else {
-      stop("No usable van Genuchten or texture data for layer.")
-    }
+    } else stop("No usable van Genuchten or texture data for layer.")
   }
   lll <- max(lll, .LL_FLOOR)
   dul <- max(dul, lll + .PAW_MIN)
@@ -95,125 +68,155 @@ water_limits <- function(theta_r, theta_s, alpha, n,
 }
 
 ssks_cmhr <- function(ksat) {
-  # SSKS (cm/hr); ksat already back-transformed to linear cm/hr.
   if (is.na(ksat)) return(-99)
   min(999, max(0, ksat))
 }
 
-# ------------------------------------------------------------------------------
-#  2. DSSAT .SOL formatter
-# ------------------------------------------------------------------------------
 format_dssat_sol_file_polaris <- function(site_data, output_dir,
                                           source_name = "POLARIS v1.0",
                                           source_tag = "p50") {
   if (nrow(site_data) == 0) stop("No soil layers found for this ID.")
-  if (all(is.na(site_data$clay)) || all(is.na(site_data$silt)) ||
-      all(is.na(site_data$bd))) {
+  if (all(is.na(site_data$clay)) || all(is.na(site_data$silt)) || all(is.na(site_data$bd)))
     stop("Critical soil data (clay/silt/bulk density) all NA.")
-  }
   soil_id <- as.character(site_data$ID[1])
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
   filename <- file.path(output_dir, paste0(soil_id, ".SOL"))
-
   cat(sprintf("*SOILS: %s\n", source_name), file = filename)
-  cat(sprintf("! Source: %s (statistic=%s)\n\n", source_name, source_tag),
-      file = filename, append = TRUE)
-  cat(sprintf("*%-10s  POLARIS       %9.3f %9.3f\n",
-              substr(soil_id, 1, 10), site_data$latitude[1], site_data$longitude[1]),
-      file = filename, append = TRUE)
+  cat(sprintf("! Source: %s (statistic=%s)\n\n", source_name, source_tag), file = filename, append = TRUE)
+  cat(sprintf("*%-10s  POLARIS       %9.3f %9.3f\n", substr(soil_id, 1, 10), site_data$latitude[1], site_data$longitude[1]), file = filename, append = TRUE)
   cat("@SITE        COUNTRY          LAT     LONG SCS FAMILY\n", file = filename, append = TRUE)
-  cat(sprintf(" %-11s USA           %9.3f %9.3f \n",
-              substr(soil_id, 1, 11), site_data$latitude[1], site_data$longitude[1]),
-      file = filename, append = TRUE)
+  cat(sprintf(" %-11s USA           %9.3f %9.3f \n", substr(soil_id, 1, 11), site_data$latitude[1], site_data$longitude[1]), file = filename, append = TRUE)
   cat("@ SCOM  SALB  SLU1  SLDR  SLRO  SLNF  SLPF  SMHB  SMPX  SMKE\n", file = filename, append = TRUE)
   cat("    BN   .13     6    .6    73     1     1 IB001 IB001 IB001\n", file = filename, append = TRUE)
-  cat("@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI  SLCF  SLNI  SLHW  SLHB  SCEC  SADC\n",
-      file = filename, append = TRUE)
-
+  cat("@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI  SLCF  SLNI  SLHW  SLHB  SCEC  SADC\n", file = filename, append = TRUE)
   site_data <- site_data[order(site_data$depth_bottom), ]
   for (i in seq_len(nrow(site_data))) {
     layer <- site_data[i, ]
-    srgf <- exp(-0.02 * layer$depth_center)
-    if (srgf < 0.02) srgf <- 0
+    srgf <- exp(-0.02 * layer$depth_center); if (srgf < 0.02) srgf <- 0
     slhw <- if (is.na(layer$ph)) -99 else layer$ph
-    cat(sprintf(
-      "%6d   -99 %5.3f %5.3f %5.3f %5.2f %5.1f %5.2f %5.2f %5.1f %5.1f   -99   -99 %5.1f   -99   -99   -99\n",
-      as.integer(layer$depth_bottom), layer$SLLL, layer$SDUL, layer$SSAT,
-      srgf, layer$SSKS, layer$bd, layer$oc_pct, layer$clay, layer$silt, slhw),
-      file = filename, append = TRUE)
+    cat(sprintf("%6d   -99 %5.3f %5.3f %5.3f %5.2f %5.1f %5.2f %5.2f %5.1f %5.1f   -99   -99 %5.1f   -99   -99   -99\n",
+                as.integer(layer$depth_bottom), layer$SLLL, layer$SDUL, layer$SSAT,
+                srgf, layer$SSKS, layer$bd, layer$oc_pct, layer$clay, layer$silt, slhw),
+        file = filename, append = TRUE)
   }
   cat("\n", file = filename, append = TRUE)
 }
 
-# ------------------------------------------------------------------------------
-#  3. Tile fetch (terra /vsicurl, optional local cache)
-# ------------------------------------------------------------------------------
+# Remote access is intentionally bounded. GDAL /vsicurl can otherwise wait for a
+# stalled server for an implementation-dependent amount of time, making a sweep
+# appear frozen. Environment overrides allow slower networks/HPC sites to tune it.
+polaris_timeout_sec <- function() {
+  x <- suppressWarnings(as.numeric(Sys.getenv("POLARIS_TIMEOUT_SEC", "45")))
+  if (!is.finite(x) || x <= 0) 45 else x
+}
+polaris_retries <- function() {
+  x <- suppressWarnings(as.integer(Sys.getenv("POLARIS_RETRIES", "3")))
+  if (is.na(x) || x < 1L) 3L else x
+}
+polaris_progress_every <- function() {
+  x <- suppressWarnings(as.integer(Sys.getenv("POLARIS_PROGRESS_EVERY", "10")))
+  if (is.na(x) || x < 1L) 10L else x
+}
+
 polaris_tile_source <- function(var, stat, depth_label, tile, cache_dir = NULL) {
   url <- sprintf("%s/%s/%s/%s/%s.tif", POLARIS_BASE, var, stat, depth_label, tile)
   if (is.null(cache_dir)) return(paste0("/vsicurl/", url))
   local <- file.path(cache_dir, var, stat, depth_label, paste0(tile, ".tif"))
   if (!file.exists(local)) {
     dir.create(dirname(local), recursive = TRUE, showWarnings = FALSE)
-    utils::download.file(url, local, mode = "wb", quiet = TRUE)
+    old_timeout <- getOption("timeout")
+    on.exit(options(timeout = old_timeout), add = TRUE)
+    options(timeout = max(old_timeout, polaris_timeout_sec()))
+    tmp <- paste0(local, ".tmp")
+    on.exit(if (file.exists(tmp)) unlink(tmp), add = TRUE)
+    utils::download.file(url, tmp, mode = "wb", quiet = TRUE)
+    if (!file.rename(tmp, local)) stop("Could not move downloaded POLARIS tile into cache: ", local)
   }
   local
 }
 
+# Extract raster VALUES, never terra's optional row-ID column. The previous
+# `terra::extract(...)[,1]` could return point IDs rather than soil values.
+polaris_extract_values <- function(src, pts, n_expected, retries = polaris_retries()) {
+  last_error <- NULL
+  for (attempt in seq_len(retries)) {
+    ans <- tryCatch({
+      r <- terra::rast(src)
+      z <- terra::extract(r, pts, ID = FALSE)
+      if (is.null(z) || ncol(z) < 1L) stop("terra::extract returned no value column")
+      vals <- as.numeric(z[[1]])
+      if (length(vals) != n_expected)
+        stop(sprintf("terra::extract returned %d values for %d points", length(vals), n_expected))
+      vals
+    }, error = function(e) { last_error <<- e; NULL })
+    if (!is.null(ans)) return(ans)
+    if (attempt < retries) Sys.sleep(min(2^(attempt - 1L), 4))
+  }
+  warning(sprintf("POLARIS raster read failed after %d attempt(s): %s",
+                  retries, conditionMessage(last_error)), call. = FALSE)
+  rep(NA_real_, n_expected)
+}
+
 fetch_polaris <- function(gridfile, id_col, stat, cache_dir = NULL) {
+  if (!requireNamespace("terra", quietly = TRUE)) stop("terra is required for POLARIS extraction.")
   gdf <- sf::st_transform(gridfile, 4326)
   coords <- sf::st_coordinates(gdf)
   lons <- coords[, 1]; lats <- coords[, 2]
   ids <- gridfile[[id_col]]
   tile_key <- mapply(polaris_tile, lats, lons)
+  tiles <- unique(tile_key)
+  total <- length(tiles) * length(.polaris_vars) * length(.polaris_dlabel)
+  done <- 0L
 
-  out <- list()
-  for (tile in unique(tile_key)) {
+  old_gdal_timeout <- Sys.getenv("GDAL_HTTP_TIMEOUT", unset = NA_character_)
+  old_gdal_retry <- Sys.getenv("GDAL_HTTP_MAX_RETRY", unset = NA_character_)
+  on.exit({
+    if (is.na(old_gdal_timeout)) Sys.unsetenv("GDAL_HTTP_TIMEOUT") else Sys.setenv(GDAL_HTTP_TIMEOUT = old_gdal_timeout)
+    if (is.na(old_gdal_retry)) Sys.unsetenv("GDAL_HTTP_MAX_RETRY") else Sys.setenv(GDAL_HTTP_MAX_RETRY = old_gdal_retry)
+  }, add = TRUE)
+  Sys.setenv(GDAL_HTTP_TIMEOUT = as.character(polaris_timeout_sec()), GDAL_HTTP_MAX_RETRY = "1")
+
+  message(sprintf("POLARIS: %d point(s), %d tile(s), %d remote raster read(s); timeout=%ss, retries=%d",
+                  length(ids), length(tiles), total, polaris_timeout_sec(), polaris_retries()))
+  out <- vector("list", total)
+  out_i <- 0L
+  for (tile_i in seq_along(tiles)) {
+    tile <- tiles[[tile_i]]
     sel <- which(tile_key == tile)
     pts <- cbind(lons[sel], lats[sel])
+    message(sprintf("POLARIS tile %d/%d: %s (%d point%s)", tile_i, length(tiles), tile,
+                    length(sel), if (length(sel) == 1L) "" else "s"))
     for (var in .polaris_vars) {
       for (d in seq_along(.polaris_dlabel)) {
         src <- polaris_tile_source(var, stat, .polaris_dlabel[d], tile, cache_dir)
-        vals <- tryCatch(terra::extract(terra::rast(src), pts)[, 1],
-                         error = function(e) {
-                           warning(sprintf("POLARIS skip %s/%s/%s/%s: %s",
-                                           var, stat, .polaris_dlabel[d], tile,
-                                           conditionMessage(e)))
-                           rep(NA_real_, length(sel))
-                         })
+        vals <- polaris_extract_values(src, pts, length(sel))
         vals <- vapply(vals, function(v) polaris_backtransform(var, v), numeric(1))
-        out[[length(out) + 1]] <- data.frame(
-          ID = ids[sel], prop = var,
-          depth_bottom = .polaris_dbot[d], depth_center = .polaris_dctr[d],
-          value = vals, stringsAsFactors = FALSE)
+        out_i <- out_i + 1L
+        out[[out_i]] <- data.frame(ID = ids[sel], prop = var,
+                                   depth_bottom = .polaris_dbot[d], depth_center = .polaris_dctr[d],
+                                   value = vals, stringsAsFactors = FALSE)
+        done <- done + 1L
+        if (done %% polaris_progress_every() == 0L || done == total)
+          message(sprintf("POLARIS progress: %d/%d raster reads (%.1f%%)", done, total, 100 * done / total))
       }
     }
   }
-  do.call(rbind, out)
+  do.call(rbind, out[seq_len(out_i)])
 }
 
-# ------------------------------------------------------------------------------
-#  4. Public entry point
-# ------------------------------------------------------------------------------
 process_soils_polaris <- function(gridfile, soilfile_csv_path, output_sol_dir,
                                   id_col, stat = "p50", cache_dir = NULL) {
-  if (!stat %in% c("p50", "mean", "mode", "p5", "p95"))
-    stop(sprintf("Unknown POLARIS statistic: %s", stat))
-
+  if (!stat %in% c("p50", "mean", "mode", "p5", "p95")) stop(sprintf("Unknown POLARIS statistic: %s", stat))
   message(sprintf("--- POLARIS extraction (statistic=%s, CONUS 30 m) ---", stat))
   grid_wgs84 <- sf::st_transform(gridfile, 4326)
   cc <- sf::st_coordinates(grid_wgs84)
-
   long_df <- fetch_polaris(gridfile, id_col, stat, cache_dir)
-  if (is.null(long_df) || nrow(long_df) == 0)
-    stop("No POLARIS data extracted (coords outside CONUS, or server unreachable).")
+  if (is.null(long_df) || nrow(long_df) == 0) stop("No POLARIS data extracted (coords outside CONUS, or server unreachable).")
 
-  wide <- as.data.frame(tidyr::pivot_wider(
-    long_df, id_cols = c("ID", "depth_bottom", "depth_center"),
-    names_from = "prop", values_from = "value",
+  wide <- as.data.frame(tidyr::pivot_wider(long_df,
+    id_cols = c("ID", "depth_bottom", "depth_center"), names_from = "prop", values_from = "value",
     values_fn = function(x) x[1]))
   for (v in .polaris_vars) if (!v %in% names(wide)) wide[[v]] <- NA_real_
-
-  # drop points with no texture anywhere
   usable_ids <- unique(wide$ID[!is.na(wide$sand) | !is.na(wide$clay)])
   wide <- wide[wide$ID %in% usable_ids, , drop = FALSE]
   if (nrow(wide) == 0) stop("No usable POLARIS data for any point.")
@@ -228,15 +231,9 @@ process_soils_polaris <- function(gridfile, soilfile_csv_path, output_sol_dir,
   wide$SDUL <- vapply(lim, `[[`, numeric(1), "SDUL")
   wide$SSAT <- vapply(lim, `[[`, numeric(1), "SSAT")
 
-  coords_df <- data.frame(ID = grid_wgs84[[id_col]],
-                          longitude = cc[, 1], latitude = cc[, 2],
-                          stringsAsFactors = FALSE)
+  coords_df <- data.frame(ID = grid_wgs84[[id_col]], longitude = cc[, 1], latitude = cc[, 2], stringsAsFactors = FALSE)
   final_df <- merge(wide, coords_df, by = "ID")
-
-  utils::write.csv(data.frame(ID = grid_wgs84[[id_col]],
-                              SOIL_ID = grid_wgs84[[id_col]]),
-                   soilfile_csv_path, row.names = FALSE)
-
+  utils::write.csv(data.frame(ID = grid_wgs84[[id_col]], SOIL_ID = grid_wgs84[[id_col]]), soilfile_csv_path, row.names = FALSE)
   if (!dir.exists(output_sol_dir)) dir.create(output_sol_dir, recursive = TRUE)
   log_path <- file.path(output_sol_dir, "soil_processing_errors.log")
   cat(sprintf("Log started: %s\n", Sys.time()), file = log_path)
@@ -244,15 +241,10 @@ process_soils_polaris <- function(gridfile, soilfile_csv_path, output_sol_dir,
   success <- 0; errors <- 0
   for (uid in unique(final_df$ID)) {
     subset_df <- final_df[final_df$ID == uid, , drop = FALSE]
-    res <- tryCatch({
-      format_dssat_sol_file_polaris(subset_df, output_sol_dir, source_tag = stat); TRUE
-    }, error = function(e) {
-      cat(sprintf("ID: %s | Error: %s\n", uid, conditionMessage(e)),
-          file = log_path, append = TRUE); FALSE
-    })
+    res <- tryCatch({ format_dssat_sol_file_polaris(subset_df, output_sol_dir, source_tag = stat); TRUE },
+                    error = function(e) { cat(sprintf("ID: %s | Error: %s\n", uid, conditionMessage(e)), file = log_path, append = TRUE); FALSE })
     if (isTRUE(res)) success <- success + 1 else errors <- errors + 1
   }
-  message(sprintf("POLARIS processing complete. Success: %d, Errors: %d",
-                  success, errors))
+  message(sprintf("POLARIS processing complete. Success: %d, Errors: %d", success, errors))
   invisible(NULL)
 }
