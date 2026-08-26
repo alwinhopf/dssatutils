@@ -83,6 +83,8 @@ class TestComprehensive(unittest.TestCase):
             "precipitation_sum": np.random.uniform(0, 10, n),
             "shortwave_radiation_sum": np.random.uniform(10, 25, n),
             "wind_speed_10m_mean": np.random.uniform(1, 8, n),
+            "dew_point_2m_mean": np.full(n, 12.0),
+            "relative_humidity_2m_mean": np.full(n, 70.0),
         })
         mock_df["YEAR"] = dates.year
         mock_df["MM"] = dates.month
@@ -106,7 +108,12 @@ class TestComprehensive(unittest.TestCase):
             "log_file": os.path.join(self.work, "error.log"),
         })
 
-        self._assert_wth_valid(os.path.join(out_dir, "TEST_1.WTH"))
+        wth = os.path.join(out_dir, "TEST_1.WTH")
+        self._assert_wth_valid(wth)
+        with open(wth) as fh:
+            text = fh.read()
+        self.assertIn("TDEW  RH2M", text)
+        self.assertIn("  12.0  70.0", text)
 
     @patch("dssatutils.weather_nasapower._fetch_nasa_power")
     @patch("dssatutils.weather_nasapower.ProcessPoolExecutor")

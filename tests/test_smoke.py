@@ -67,6 +67,8 @@ def _make_fake_fetch():
             "precipitation_sum": [0.0 if i % 3 else 5.0 for i in range(n)],
             "shortwave_radiation_sum": [18.0 for _ in range(n)],
             "wind_speed_10m_mean": [3.0 for _ in range(n)],
+            "dew_point_2m_mean": [12.0 for _ in range(n)],
+            "relative_humidity_2m_mean": [70.0 for _ in range(n)],
         })
         df["YEAR"] = df["time"].dt.year
         df["MM"] = df["time"].dt.month
@@ -100,7 +102,7 @@ def test_wth_writer_synthetic():
         assert data[0][:7].strip() == "2010001", \
             f"first DATE token wrong: {data[0][:7].strip()!r}"
         assert "nan" not in "".join(data).lower(), "NaN found in data block"
-        assert "OPEN-METEO ERA5-LAND" in lines[0]
+        assert "OPEN-METEO ERA5-SEAMLESS" in lines[0]
         assert float(data[0].split()[-1]) == 2.2
 
 

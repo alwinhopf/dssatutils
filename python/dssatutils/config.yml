@@ -10,6 +10,8 @@ cds:
 weather:
   openmeteo:
     archive_url: "https://archive-api.open-meteo.com/v1/archive"
+    # ERA5-Seamless: ERA5-Land temperature/humidity plus ERA5 forcing fields.
+    model: "era5_seamless"
     archive_lag_days: 6
     request_delay_seconds: 20
     minutely_limit_sleep_seconds: 75

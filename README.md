@@ -131,8 +131,10 @@ deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
   `weather_repair.log`.
 - **GridMET** RH2M and TDEW are *estimated* (`TDEW ≈ TMIN − 2.5`, RH from the
   diurnal temperature range), not measured.
-- **Open-Meteo** has no daily dewpoint/RH, so it writes `TDEW = -99`, `RH2M = -99`
-  (DSSAT-valid missing). ET methods needing RH will degrade.
+- **Open-Meteo** uses the API's `dew_point_2m_mean` and
+  `relative_humidity_2m_mean` for DSSAT `TDEW` and `RH2M`. The default
+  `era5_seamless` model combines ERA5-Land temperature/humidity with ERA5
+  forcing fields so radiation, precipitation, and wind remain complete.
 - **TAV/AMP** is computed via `DSSAT::calc_TAV/calc_AMP` for GridMET but hand-rolled
   (monthly-mean amplitude) for the other sources — values are close but not
   identical. Consolidating into one shared helper is a planned cleanup.

@@ -1,11 +1,11 @@
 # File: weather_openmeteo.R
 # ---------------------------------------------------------------------------
-# Open-Meteo Historical Weather (ERA5 / ERA5-Land reanalysis) -> DSSAT .WTH.
+# Open-Meteo Historical Weather (ERA5-Seamless reanalysis) -> DSSAT .WTH.
 #
 # WHY THIS SOURCE: truly GLOBAL daily coverage (Europe, Asia, Africa, Oceania,
 # South America) from 1940 onward, NO API KEY, no registration. Complements
-# DAYMET (North America) and GRIDMET (US). A higher-resolution (~9 km, ERA5-Land)
-# alternative to NASA POWER for non-US regions.
+# DAYMET (North America) and GRIDMET (US). ERA5-Seamless preserves ERA5-Land
+# temperature/humidity while supplying the complete forcing record DSSAT needs.
 #
 # API:     https://open-meteo.com/en/docs/historical-weather-api
 # License: ERA5 data is CC-BY 4.0 (Copernicus/ECMWF) — cite when publishing.
@@ -16,11 +16,47 @@
 # Log-wind-profile factor: 10 m -> 2 m wind (FAO-56), ~0.748.
 .OMET_WIND_10M_TO_2M <- 0.748
 
+.openmeteo_daily_to_weather <- function(daily) {
+  required_api <- c(
+    "shortwave_radiation_sum", "temperature_2m_max", "temperature_2m_min",
+    "precipitation_sum", "wind_speed_10m_mean", "dew_point_2m_mean",
+    "relative_humidity_2m_mean"
+  )
+  missing_api <- setdiff(required_api, names(daily))
+  empty_api <- required_api[vapply(required_api, function(nm) {
+    nm %in% names(daily) && all(is.na(daily[[nm]]))
+  }, logical(1))]
+  if (length(missing_api) || length(empty_api)) {
+    details <- c(
+      if (length(missing_api)) paste0("missing columns: ", paste(missing_api, collapse = ", ")),
+      if (length(empty_api)) paste0("all-null columns: ", paste(empty_api, collapse = ", "))
+    )
+    stop("Open-Meteo did not return complete daily DSSAT weather (",
+         paste(details, collapse = "; "), ").")
+  }
+
+  dts <- as.Date(daily$time)
+  weather_data <- data.frame(
+    YEAR = lubridate::year(dts),
+    MM   = lubridate::month(dts),
+    DOY  = lubridate::yday(dts),
+    SRAD = daily$shortwave_radiation_sum,
+    TMAX = daily$temperature_2m_max,
+    TMIN = daily$temperature_2m_min,
+    RAIN = daily$precipitation_sum,
+    WIND = daily$wind_speed_10m_mean * .OMET_WIND_10M_TO_2M,
+    TDEW = daily$dew_point_2m_mean,
+    RH2M = daily$relative_humidity_2m_mean
+  )
+  weather_data$DATE <- sprintf("%d%03d", weather_data$YEAR, weather_data$DOY)
+  num_cols <- c("SRAD", "TMAX", "TMIN", "RAIN", "WIND", "TDEW", "RH2M")
+  weather_data[num_cols] <- lapply(weather_data[num_cols],
+                                   function(x) ifelse(is.na(x), -99, x))
+  weather_data
+}
+
 process_weather_openmeteo <- function(shapefile, start_year, end_year, output_dir,
                                       id_col, lat_col, lon_col, n_cores, log_file) {
-
-  message(sprintf("--- Starting Open-Meteo (ERA5-Land) Download (Years: %d-%d) ---",
-                  start_year, end_year))
 
   start_date_str <- paste0(start_year, "-01-01")
   current_year <- lubridate::year(Sys.Date())
@@ -33,7 +69,14 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
 
   daily_vars <- paste(c("temperature_2m_max", "temperature_2m_min",
                         "precipitation_sum", "shortwave_radiation_sum",
-                        "wind_speed_10m_mean"), collapse = ",")
+                        "wind_speed_10m_mean", "dew_point_2m_mean",
+                        "relative_humidity_2m_mean"), collapse = ",")
+  openmeteo_model <- as.character(.dssatutils_config_get(
+    "weather.openmeteo.model",
+    "era5_seamless"
+  ))
+  message(sprintf("--- Starting Open-Meteo (%s) Download (Years: %d-%d) ---",
+                  openmeteo_model, start_year, end_year))
 
   if (n_cores > 1) {
     message(sprintf(
@@ -82,7 +125,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
 
   foreach(i = 1:nrow(shapefile),
           .packages = c("httr", "jsonlite", "lubridate", "dplyr"),
-          .export = c(".OMET_WIND_10M_TO_2M")) %dopar% {
+          .export = c(".OMET_WIND_10M_TO_2M", ".openmeteo_daily_to_weather")) %dopar% {
 
     latitude  <- lats[i]
     longitude <- lons[i]
@@ -103,7 +146,10 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
                        query = list(latitude = latitude, longitude = longitude,
                                     start_date = start_date_str, end_date = end_date_str,
                                     daily = daily_vars, windspeed_unit = "ms",
-                                    models = "era5_land",
+                                    # ERA5-Seamless uses ERA5-Land for
+                                    # temperature/humidity and ERA5 for forcing
+                                    # variables needed by a complete DSSAT WTH.
+                                    models = openmeteo_model,
                                     timezone = "UTC"),
                        httr::timeout(180))
         last_status <- httr::status_code(r)
@@ -141,23 +187,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
       daily <- d$daily
       if (is.null(daily) || length(daily$time) == 0) stop("No data returned from Open-Meteo.")
 
-      dts <- as.Date(daily$time)
-      weather_data <- data.frame(
-        YEAR = lubridate::year(dts),
-        MM   = lubridate::month(dts),
-        DOY  = lubridate::yday(dts),
-        SRAD = daily$shortwave_radiation_sum,
-        TMAX = daily$temperature_2m_max,
-        TMIN = daily$temperature_2m_min,
-        RAIN = daily$precipitation_sum,
-        WIND = daily$wind_speed_10m_mean * .OMET_WIND_10M_TO_2M,
-        TDEW = -99,   # Open-Meteo has no daily dewpoint
-        RH2M = -99    # ... or daily RH
-      )
-      weather_data$DATE <- sprintf("%d%03d", weather_data$YEAR, weather_data$DOY)
-      num_cols <- c("SRAD", "TMAX", "TMIN", "RAIN", "WIND")
-      weather_data[num_cols] <- lapply(weather_data[num_cols],
-                                       function(x) ifelse(is.na(x), -99, x))
+      weather_data <- .openmeteo_daily_to_weather(daily)
 
       weather_data$TAVG <- (weather_data$TMAX + weather_data$TMIN) / 2
       tav <- mean(weather_data$TAVG, na.rm = TRUE)
@@ -168,7 +198,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
       amp <- mean(annual$AMP_YR, na.rm = TRUE)
 
       wth_header <- sprintf(
-        "$WEATHER DATA: OPEN-METEO ERA5-LAND (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  OMET %8.4f %8.4f   -99 %5.1f %5.1f   2.0   2.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+        "$WEATHER DATA: OPEN-METEO ERA5-SEAMLESS (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  OMET %8.4f %8.4f   -99 %5.1f %5.1f   2.0   2.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
         point_id, latitude, longitude, tav, amp)
 
       # Guard against values that would overflow a %6.1f field and shift every

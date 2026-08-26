@@ -100,6 +100,8 @@ def _openmeteo_frame(year: int = YEAR):
         "precipitation_sum": np.full(len(dates), 1.0),
         "shortwave_radiation_sum": np.full(len(dates), 18.0),
         "wind_speed_10m_mean": np.full(len(dates), 3.0),
+        "dew_point_2m_mean": np.full(len(dates), 12.0),
+        "relative_humidity_2m_mean": np.full(len(dates), 70.0),
         "YEAR": dates.year,
         "MM": dates.month,
         "DOY": dates.dayofyear,
@@ -436,6 +438,7 @@ def test_process_weather_openmeteo_entrypoint(tmp_path):
             str(tmp_path / "openmeteo.log"),
         )
     _assert_wth(out_dir / "SRC1.WTH")
+    assert "  12.0  70.0" in (out_dir / "SRC1.WTH").read_text()
 
 
 def test_process_weather_nasapower_entrypoint(tmp_path):

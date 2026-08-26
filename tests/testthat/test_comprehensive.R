@@ -40,7 +40,9 @@ test_that("process_weather_openmeteo runs successfully with mocks", {
           "temperature_2m_min": [15.0, 16.0],
           "precipitation_sum": [0.0, 1.2],
           "shortwave_radiation_sum": [18.0, 19.0],
-          "wind_speed_10m_max": [3.0, 4.0]
+          "wind_speed_10m_mean": [3.0, 4.0],
+          "dew_point_2m_mean": [12.0, 13.0],
+          "relative_humidity_2m_mean": [70.0, 72.0]
         }}')
       )
       class(mock_response) <- "response"
@@ -64,6 +66,23 @@ test_that("process_weather_openmeteo runs successfully with mocks", {
   )
   
   assert_wth_valid(file.path(work_dir, "TEST1.WTH"))
+})
+
+test_that("Open-Meteo maps daily dewpoint and humidity to DSSAT fields", {
+  daily <- data.frame(
+    time = c("2010-01-01", "2010-01-02"),
+    temperature_2m_max = c(25, 26),
+    temperature_2m_min = c(15, 16),
+    precipitation_sum = c(0, 1.2),
+    shortwave_radiation_sum = c(18, 19),
+    wind_speed_10m_mean = c(3, 4),
+    dew_point_2m_mean = c(12, 13),
+    relative_humidity_2m_mean = c(70, 72)
+  )
+  got <- dssatutils:::.openmeteo_daily_to_weather(daily)
+  expect_equal(got$TDEW, c(12, 13))
+  expect_equal(got$RH2M, c(70, 72))
+  expect_equal(got$WIND, c(3, 4) * 0.748)
 })
 
 test_that("process_weather_nasapower runs successfully with mocks", {

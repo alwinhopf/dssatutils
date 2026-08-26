@@ -5,8 +5,8 @@
 # WHY THIS SOURCE: gives truly GLOBAL daily coverage (Europe, Asia, Africa,
 # Oceania, South America) from 1940 onward with NO API KEY and no registration,
 # complementing DAYMET (North America only) and GRIDMET (US only). NASA POWER is
-# also global; Open-Meteo (ERA5-Land, ~9 km) is a higher-resolution alternative
-# for non-US regions.
+# also global; ERA5-Seamless preserves ERA5-Land temperature/humidity while
+# supplying the complete forcing record DSSAT needs.
 #
 # API docs: https://open-meteo.com/en/docs/historical-weather-api
 # License:  data is CC-BY 4.0 (ERA5 by Copernicus/ECMWF). Cite when publishing.
@@ -37,6 +37,10 @@ _ARCHIVE_URL = get_config_value(
     "weather.openmeteo.archive_url",
     "https://archive-api.open-meteo.com/v1/archive",
 )
+_OPEN_METEO_MODEL = get_config_value(
+    "weather.openmeteo.model",
+    "era5_seamless",
+)
 
 # Daily variables requested from Open-Meteo (ERA5 archive).
 _DAILY_VARS = [
@@ -45,6 +49,8 @@ _DAILY_VARS = [
     "precipitation_sum",           # mm
     "shortwave_radiation_sum",     # MJ/m2  (DSSAT SRAD)
     "wind_speed_10m_mean",         # m/s daily mean (windspeed_unit=ms)
+    "dew_point_2m_mean",           # degC daily mean (DSSAT TDEW)
+    "relative_humidity_2m_mean",   # % daily mean (DSSAT RH2M)
 ]
 
 # Log-wind-profile factor to convert 10 m wind to 2 m (FAO-56):
@@ -82,7 +88,10 @@ def _fetch_open_meteo(lat: float, lon: float, start: str, end: str,
         "daily": ",".join(_DAILY_VARS),
         "windspeed_unit": "ms",
         "timezone": "UTC",
-        "models": "era5_land",
+        # ERA5-Seamless uses ERA5-Land for temperature/humidity and ERA5 for
+        # forcing variables that ERA5-Land does not expose through Open-Meteo
+        # (notably radiation and wind). This produces a complete DSSAT record.
+        "models": _OPEN_METEO_MODEL,
     }
     for attempt in range(retries):
         try:
@@ -130,21 +139,33 @@ def _process_single_point(args: dict) -> None:
             "temperature_2m_min": "TMIN",
             "precipitation_sum": "RAIN",
             "wind_speed_10m_mean": "WIND",
+            "dew_point_2m_mean": "TDEW",
+            "relative_humidity_2m_mean": "RH2M",
         })
+        required = ["SRAD", "TMAX", "TMIN", "RAIN", "WIND", "TDEW", "RH2M"]
+        missing = [col for col in required if col not in df.columns]
+        empty = [col for col in required if col in df.columns and df[col].isna().all()]
+        if missing or empty:
+            details = []
+            if missing:
+                details.append("missing columns: " + ", ".join(missing))
+            if empty:
+                details.append("all-null columns: " + ", ".join(empty))
+            raise ValueError(
+                "Open-Meteo did not return complete daily DSSAT weather ("
+                + "; ".join(details) + ")."
+            )
         # 10 m -> 2 m wind adjustment.
         df["WIND"] = df["WIND"] * _WIND_10M_TO_2M
-        # Open-Meteo does not provide daily dewpoint / RH -> mark missing (-99).
-        df["TDEW"] = -99.0
-        df["RH2M"] = -99.0
         # Fill any gaps with the DSSAT missing sentinel.
-        for col in ["SRAD", "TMAX", "TMIN", "RAIN", "WIND"]:
+        for col in required:
             df[col] = df[col].fillna(-99.0)
 
         tav = _calc_tav(df)
         amp = _calc_amp(df)
 
         header = (
-            f"$WEATHER DATA: OPEN-METEO ERA5-LAND (Point ID: {pid})\n"
+            f"$WEATHER DATA: OPEN-METEO ERA5-SEAMLESS (Point ID: {pid})\n"
             f"@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n"
             f"  OMET {lat:8.4f} {lon:8.4f}   -99 {tav:5.1f} {amp:5.1f}   2.0   2.0\n"
             f"@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND"
@@ -173,9 +194,11 @@ def _process_single_point(args: dict) -> None:
 
 def process_weather_openmeteo(shapefile, start_year, end_year, output_dir,
                               id_col, lat_col, lon_col, n_cores, log_file):
-    """Download Open-Meteo (ERA5) daily weather for every point and write .WTH.
+    """Download Open-Meteo ERA5-Seamless daily weather and write DSSAT .WTH.
 
-    Drop-in replacement for process_weather_nasapower(); same signature.
+    ERA5-Seamless combines ERA5-Land temperature/humidity with the ERA5
+    forcing variables needed for complete DSSAT weather. Drop-in replacement
+    for process_weather_nasapower(); same signature.
     """
     today = date.today()
     start_date = f"{start_year}-01-01"
@@ -187,7 +210,7 @@ def process_weather_openmeteo(shapefile, start_year, end_year, output_dir,
     else:
         end_date = f"{end_year}-12-31"
 
-    print(f"--- Starting Open-Meteo (ERA5-Land) Download (Years: {start_year}-{end_year}) ---")
+    print(f"--- Starting Open-Meteo ({_OPEN_METEO_MODEL}) Download (Years: {start_year}-{end_year}) ---")
     print(f"Registered {n_cores} cores for parallel Open-Meteo download.")
     os.makedirs(output_dir, exist_ok=True)
 
