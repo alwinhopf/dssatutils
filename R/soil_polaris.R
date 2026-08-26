@@ -102,9 +102,6 @@ format_dssat_sol_file_polaris <- function(site_data, output_dir,
   cat("\n", file = filename, append = TRUE)
 }
 
-# Remote access is intentionally bounded. GDAL /vsicurl can otherwise wait for a
-# stalled server for an implementation-dependent amount of time, making a sweep
-# appear frozen. Environment overrides allow slower networks/HPC sites to tune it.
 polaris_timeout_sec <- function() {
   x <- suppressWarnings(as.numeric(Sys.getenv("POLARIS_TIMEOUT_SEC", "45")))
   if (!is.finite(x) || x <= 0) 45 else x
@@ -135,14 +132,17 @@ polaris_tile_source <- function(var, stat, depth_label, tile, cache_dir = NULL) 
   local
 }
 
-# Extract raster VALUES, never terra's optional row-ID column. The previous
-# `terra::extract(...)[,1]` could return point IDs rather than soil values.
+# Normalize matrix coordinates to SpatVector so terra's ID=FALSE behavior is
+# explicit and consistent across terra versions/platforms. The matrix extract
+# method has a different formal signature and should not receive ID directly.
 polaris_extract_values <- function(src, pts, n_expected, retries = polaris_retries()) {
   last_error <- NULL
   for (attempt in seq_len(retries)) {
     ans <- tryCatch({
       r <- terra::rast(src)
-      z <- terra::extract(r, pts, ID = FALSE)
+      p <- terra::vect(data.frame(x = pts[, 1], y = pts[, 2]),
+                       geom = c("x", "y"), crs = terra::crs(r))
+      z <- terra::extract(r, p, ID = FALSE)
       if (is.null(z) || ncol(z) < 1L) stop("terra::extract returned no value column")
       vals <- as.numeric(z[[1]])
       if (length(vals) != n_expected)
