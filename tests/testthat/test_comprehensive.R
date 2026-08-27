@@ -65,7 +65,11 @@ test_that("process_weather_openmeteo runs successfully with mocks", {
     log_file = log_file
   )
   
-  assert_wth_valid(file.path(work_dir, "TEST1.WTH"))
+  wth <- file.path(work_dir, "TEST1.WTH")
+  assert_wth_valid(wth)
+  lines <- readLines(wth)
+  expect_length(lines[grepl("^\\s*2010", lines)], 2L)
+  expect_true(any(grepl("12\\.0\\s+70\\.0", lines)))
 })
 
 test_that("Open-Meteo maps daily dewpoint and humidity to DSSAT fields", {

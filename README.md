@@ -134,7 +134,8 @@ deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
 - **Open-Meteo** uses the API's `dew_point_2m_mean` and
   `relative_humidity_2m_mean` for DSSAT `TDEW` and `RH2M`. The default
   `era5_seamless` model combines ERA5-Land temperature/humidity with ERA5
-  forcing fields so radiation, precipitation, and wind remain complete.
+  forcing fields so radiation, precipitation, and wind remain complete. The R
+  adapter runs its rate-limited request stream sequentially in-process.
 - **TAV/AMP** is computed via `DSSAT::calc_TAV/calc_AMP` for GridMET but hand-rolled
   (monthly-mean amplitude) for the other sources — values are close but not
   identical. Consolidating into one shared helper is a planned cleanup.

@@ -110,12 +110,11 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
     "https://archive-api.open-meteo.com/v1/archive"
   )
 
-  cl <- parallel::makeCluster(n_cores)
-  # Safety net: release the cluster even if the download errors out before the
-  # explicit stopCluster() below. try() keeps it harmless on the normal path.
-  on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
-  doParallel::registerDoParallel(cl)
-  message(sprintf("Registered %d cores for parallel Open-Meteo download.", n_cores))
+  # Open-Meteo is deliberately rate-limited to one request stream above. Keep
+  # that stream in-process instead of creating a one-worker PSOCK cluster. In
+  # addition to avoiding needless process overhead, this makes injected HTTP
+  # clients and test mocks apply to the code that actually sends the request.
+  message("Running Open-Meteo sequentially in the current R process.")
 
   # Extract coordinates and IDs robustly
   coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
@@ -123,9 +122,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
   lats <- coords_list$lats
   lons <- coords_list$lons
 
-  foreach(i = 1:nrow(shapefile),
-          .packages = c("httr", "jsonlite", "lubridate", "dplyr"),
-          .export = c(".OMET_WIND_10M_TO_2M", ".openmeteo_daily_to_weather")) %dopar% {
+  invisible(lapply(seq_len(nrow(shapefile)), function(i) {
 
     latitude  <- lats[i]
     longitude <- lons[i]
@@ -202,8 +199,8 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
         point_id, latitude, longitude, tav, amp)
 
       # Guard against values that would overflow a %6.1f field and shift every
-      # downstream column (see weather_nasapower.R). Local so it is visible in
-      # the parallel worker; corrupt readings become the DSSAT missing value.
+      # downstream column (see weather_nasapower.R); corrupt readings become
+      # the DSSAT missing value.
       clamp_wth <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
       weather_lines <- with(weather_data, sprintf(
         "%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
@@ -220,8 +217,7 @@ process_weather_openmeteo <- function(shapefile, start_year, end_year, output_di
       cat(error_message)
       write(error_message, file = log_file, append = TRUE)
     })
-  }
+  }))
 
-  parallel::stopCluster(cl)
   message(sprintf("\nOpen-Meteo processing complete. Check the '%s' directory.\n", output_dir))
 }
