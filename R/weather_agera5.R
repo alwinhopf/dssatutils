@@ -71,6 +71,18 @@ AGERA5_TIMESERIES_PAD_DEG <- 0.2
 
 AGERA5_CDS_REQUEST_CAP <- 4L
 
+.agera5_worker_count <- function(n_cores, max_concurrent_requests = 1L, n_jobs = 1L) {
+  requested <- suppressWarnings(as.integer(n_cores))
+  if (is.na(requested) || requested < 1L) requested <- 1L
+  maximum <- suppressWarnings(as.integer(max_concurrent_requests))
+  if (is.na(maximum) || maximum < 1L) {
+    stop("agera5_max_concurrent_requests must be at least 1.", call. = FALSE)
+  }
+  jobs <- suppressWarnings(as.integer(n_jobs))
+  if (is.na(jobs) || jobs < 1L) jobs <- 1L
+  max(1L, min(requested, maximum, AGERA5_CDS_REQUEST_CAP, jobs))
+}
+
 .agera5_cds_rc_candidates <- function() {
   .dssatutils_cds_rc_candidates()
 }
@@ -107,6 +119,34 @@ AGERA5_CDS_REQUEST_CAP <- 4L
   )
 }
 
+.agera5_gridded_request <- function(job, target) {
+  req <- list(
+    dataset_short_name = "sis-agrometeorological-indicators",
+    variable = job$spec$var,
+    year = as.character(job$yr),
+    month = sprintf("%02d", 1:12),
+    day = sprintf("%02d", 1:31),
+    area = as.numeric(job$area),
+    version = "2_0",
+    target = target
+  )
+  if (!is.na(job$spec$sel_kind)) req[[job$spec$sel_kind]] <- job$spec$sel
+  req
+}
+
+.agera5_timeseries_request <- function(job, target) {
+  bounds <- .agera5_date_bounds_for_year(job$year)
+  if (is.null(bounds)) return(NULL)
+  list(
+    dataset_short_name = "sis-agrometeorological-indicators-timeseries",
+    variable = vapply(.agera5_timeseries_vars, `[[`, character(1), "var"),
+    date = unname(bounds),
+    data_format = tolower(job$data_format),
+    area = as.numeric(job$area),
+    target = target
+  )
+}
+
 .agera5_download_job <- function(job) {
   data_files <- .agera5_data_files(job$nc_dest, job$zip_dest, job$unzip_dir)
   if (length(data_files)) {
@@ -118,12 +158,7 @@ AGERA5_CDS_REQUEST_CAP <- 4L
 
   partial <- paste0(job$zip_dest, ".partial")
   if (file.exists(partial)) unlink(partial)
-  req <- list(dataset_short_name = "sis-agrometeorological-indicators",
-              variable = job$spec$var, year = as.character(job$yr),
-              month = sprintf("%02d", 1:12), day = sprintf("%02d", 1:31),
-              area = job$area, version = "2_0",
-              target = basename(partial))
-  if (!is.na(job$spec$sel_kind)) req[[job$spec$sel_kind]] <- job$spec$sel
+  req <- .agera5_gridded_request(job, basename(partial))
 
   err <- NULL
   tryCatch(
@@ -177,8 +212,13 @@ AGERA5_CDS_REQUEST_CAP <- 4L
     west <- lon_min
     repeat {
       east <- min(lon_max, west + step)
-      idx <- which(lats >= south - 1e-12 & lats <= north + 1e-12 &
-                   lons >= west - 1e-12 & lons <= east + 1e-12)
+      # Adjacent chunks share an edge. Use half-open intervals except at the
+      # outermost edge so a point is assigned to exactly one CDS request.
+      lat_match <- lats >= south - 1e-12 &
+        if (north >= lat_max) lats <= north + 1e-12 else lats < north
+      lon_match <- lons >= west - 1e-12 &
+        if (east >= lon_max) lons <= east + 1e-12 else lons < east
+      idx <- which(lat_match & lon_match)
       if (length(idx)) {
         chunks[[length(chunks) + 1L]] <- list(
           idx = idx,
@@ -224,14 +264,7 @@ AGERA5_CDS_REQUEST_CAP <- 4L
 
   partial <- paste0(dest, ".partial")
   if (file.exists(partial)) unlink(partial)
-  req <- list(
-    dataset_short_name = "sis-agrometeorological-indicators-timeseries",
-    variable = vapply(.agera5_timeseries_vars, `[[`, character(1), "var"),
-    date = unname(bounds),
-    data_format = data_format,
-    area = as.numeric(job$area),
-    target = basename(partial)
-  )
+  req <- .agera5_timeseries_request(job, basename(partial))
   err <- NULL
   tryCatch(
     ecmwfr::wf_request(request = req, path = job$cache_dir),
@@ -304,7 +337,8 @@ AGERA5_CDS_REQUEST_CAP <- 4L
 .process_weather_agera5_timeseries <- function(shapefile, start_year, end_year, output_dir,
                                                 id_col, lat_col, lon_col, n_cores, log_file,
                                                 agera5_cache_dir, agera5_data_format = "csv",
-                                                agera5_timeseries_chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG) {
+                                                agera5_timeseries_chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
+                                                agera5_max_concurrent_requests = 1L) {
   if (tolower(agera5_data_format) != "csv") {
     stop("AgERA5 time-series backend currently supports data_format='csv'.", call. = FALSE)
   }
@@ -328,7 +362,32 @@ AGERA5_CDS_REQUEST_CAP <- 4L
                                        chunk = chunk)
     }
   }
-  paths <- lapply(jobs, .agera5_download_timeseries_job)
+  workers <- .agera5_worker_count(n_cores, agera5_max_concurrent_requests, length(jobs))
+  message(sprintf(
+    "  AgERA5 time-series cache/download phase: %d year-area job(s); using %d concurrent CDS request(s) (configured maximum=%d, hard cap=%d).",
+    length(jobs), workers, as.integer(agera5_max_concurrent_requests), AGERA5_CDS_REQUEST_CAP
+  ))
+  if (workers > 1L) {
+    cl <- parallel::makeCluster(workers)
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+    parallel::clusterExport(
+      cl,
+      c(".agera5_download_timeseries_job", ".agera5_date_bounds_for_year",
+        ".agera5_timeseries_cache_path", ".agera5_timeseries_request",
+        ".agera5_slug_float", ".agera5_timeseries_vars",
+        ".agera5_cds_job_url", ".agera5_cds_retry_delay",
+        ".agera5_cds_transient_error", ".agera5_wf_request_with_retry",
+        ".agera5_ensure_ecmwfr_key", ".dssatutils_cds_default_url",
+        ".dssatutils_cds_rc_candidates", ".dssatutils_read_cdsapirc",
+        ".dssatutils_prompt_secret", "setup_cds_credentials",
+        ".dssatutils_ensure_cds_credentials"),
+      envir = parent.env(environment())
+    )
+    parallel::clusterEvalQ(cl, { library(ecmwfr); NULL })
+    paths <- parallel::parLapply(cl, jobs, .agera5_download_timeseries_job)
+  } else {
+    paths <- lapply(jobs, .agera5_download_timeseries_job)
+  }
   point_series <- setNames(lapply(ids, function(id)
     setNames(vector("list", length(.agera5_timeseries_vars)), names(.agera5_timeseries_vars))), ids)
 
@@ -391,7 +450,8 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
                                    id_col, lat_col, lon_col, n_cores, log_file,
                                    agera5_cache_dir, agera5_backend = "gridded",
                                    agera5_data_format = "csv",
-                                   agera5_timeseries_chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG) {
+                                   agera5_timeseries_chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
+                                   agera5_max_concurrent_requests = 1L) {
   backend <- gsub("-", "_", tolower(if (is.null(agera5_backend)) "gridded" else agera5_backend), fixed = TRUE)
   if (!backend %in% c("gridded", "grid", "classic", "timeseries", "time_series", "ts")) {
     stop("agera5_backend must be 'gridded' or 'timeseries'.", call. = FALSE)
@@ -405,7 +465,7 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
     return(.process_weather_agera5_timeseries(
       shapefile, start_year, end_year, output_dir, id_col, lat_col, lon_col,
       n_cores, log_file, agera5_cache_dir, agera5_data_format,
-      agera5_timeseries_chunk_degrees
+      agera5_timeseries_chunk_degrees, agera5_max_concurrent_requests
     ))
   }
 
@@ -435,16 +495,15 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
     }
   }
 
-  requested_cores <- suppressWarnings(as.integer(n_cores))
-  if (is.na(requested_cores) || requested_cores < 1L) requested_cores <- 1L
-  workers <- min(requested_cores, AGERA5_CDS_REQUEST_CAP, length(jobs))
+  workers <- .agera5_worker_count(n_cores, agera5_max_concurrent_requests, length(jobs))
   missing_jobs <- vapply(jobs, function(job) {
     !length(.agera5_data_files(job$nc_dest, job$zip_dest, job$unzip_dir))
   }, logical(1))
   if (!any(missing_jobs)) workers <- 1L
   message(sprintf(
-    "  AgERA5 cache/download phase: %d variable-year job(s), %d missing; using %d concurrent CDS request(s) (cap=%d).",
-    length(jobs), sum(missing_jobs), workers, AGERA5_CDS_REQUEST_CAP
+    "  AgERA5 cache/download phase: %d variable-year job(s), %d missing; using %d concurrent CDS request(s) (configured maximum=%d, hard cap=%d).",
+    length(jobs), sum(missing_jobs), workers, as.integer(agera5_max_concurrent_requests),
+    AGERA5_CDS_REQUEST_CAP
   ))
 
   if (workers > 1L) {
@@ -454,6 +513,9 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
       cl,
       c(".agera5_data_files", ".agera5_download_job", ".agera5_cds_rc_candidates",
         ".agera5_read_cdsapirc", ".agera5_ensure_ecmwfr_key",
+        ".agera5_gridded_request",
+        ".agera5_cds_job_url", ".agera5_cds_retry_delay",
+        ".agera5_cds_transient_error", ".agera5_wf_request_with_retry",
         ".dssatutils_cds_default_url", ".dssatutils_cds_rc_candidates",
         ".dssatutils_read_cdsapirc", ".dssatutils_prompt_secret",
         "setup_cds_credentials", ".dssatutils_ensure_cds_credentials"),

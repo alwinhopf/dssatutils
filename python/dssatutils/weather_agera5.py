@@ -74,6 +74,26 @@ _AGERA5_TIMESERIES_VARS = {
 }
 
 
+def _agera5_worker_count(n_cores, max_concurrent_requests=1, n_jobs=1) -> int:
+    """Return the bounded CDS worker count, rejecting unsafe invalid limits."""
+    try:
+        requested = int(n_cores)
+    except (TypeError, ValueError):
+        requested = 1
+    requested = max(1, requested)
+    try:
+        maximum = int(max_concurrent_requests)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("agera5_max_concurrent_requests must be at least 1.") from exc
+    if maximum < 1:
+        raise ValueError("agera5_max_concurrent_requests must be at least 1.")
+    try:
+        jobs = max(1, int(n_jobs))
+    except (TypeError, ValueError):
+        jobs = 1
+    return max(1, min(requested, maximum, _AGERA5_CDS_REQUEST_CAP, jobs))
+
+
 # ---------------------------------------------------------------------------
 # CDS credential helpers
 # ---------------------------------------------------------------------------
@@ -233,8 +253,13 @@ def _split_agera5_timeseries_chunks(lats, lons, chunk_degrees=None, pad=None):
         west = lon_min
         while west <= lon_max + 1e-12:
             east = min(lon_max, west + step)
-            mask = ((lats >= south - 1e-12) & (lats <= north + 1e-12) &
-                    (lons >= west - 1e-12) & (lons <= east + 1e-12))
+            # Half-open interior edges keep boundary points from being assigned
+            # to two adjacent CDS requests.
+            lat_mask = ((lats >= south - 1e-12) &
+                        ((lats <= north + 1e-12) if north >= lat_max else (lats < north)))
+            lon_mask = ((lons >= west - 1e-12) &
+                        ((lons <= east + 1e-12) if east >= lon_max else (lons < east)))
+            mask = lat_mask & lon_mask
             idx = np.where(mask)[0]
             if len(idx):
                 area = [
@@ -374,6 +399,7 @@ def _process_weather_agera5_timeseries(
     agera5_cache_dir: str,
     agera5_data_format: str = "csv",
     agera5_timeseries_chunk_degrees: float = _AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
+    agera5_max_concurrent_requests: int = 1,
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(agera5_cache_dir, exist_ok=True)
@@ -394,14 +420,14 @@ def _process_weather_agera5_timeseries(
     jobs = [(year, chunk) for year in range(start_year, end_year + 1)
             for chunk in chunks if _date_bounds_for_year(year) is not None]
 
-    try:
-        requested_workers = int(n_cores)
-    except Exception:  # noqa: BLE001
-        requested_workers = 1
-    workers = max(1, min(requested_workers, _AGERA5_CDS_REQUEST_CAP, len(jobs) or 1))
+    workers = _agera5_worker_count(
+        n_cores, agera5_max_concurrent_requests, len(jobs) or 1
+    )
     print(
         f"  AgERA5 time-series cache/download phase: {len(jobs)} year-area job(s); "
-        f"using {workers} concurrent CDS request(s) (cap={_AGERA5_CDS_REQUEST_CAP})."
+        f"using {workers} concurrent CDS request(s) "
+        f"(configured maximum={int(agera5_max_concurrent_requests)}, "
+        f"hard cap={_AGERA5_CDS_REQUEST_CAP})."
     )
 
     def _dl(job):
@@ -520,6 +546,7 @@ def process_weather_agera5(
     agera5_backend: str = "gridded",
     agera5_data_format: str = "csv",
     agera5_timeseries_chunk_degrees: float = _AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
+    agera5_max_concurrent_requests: int = 1,
 ) -> None:
     """Download AgERA5 over the grid's bounding box and write DSSAT .WTH files.
 
@@ -543,6 +570,7 @@ def process_weather_agera5(
             agera5_cache_dir=agera5_cache_dir,
             agera5_data_format=agera5_data_format,
             agera5_timeseries_chunk_degrees=agera5_timeseries_chunk_degrees,
+            agera5_max_concurrent_requests=agera5_max_concurrent_requests,
         )
     if backend not in ("gridded", "grid", "classic"):
         raise ValueError("agera5_backend must be 'gridded' or 'timeseries'.")
@@ -568,10 +596,9 @@ def process_weather_agera5(
     import xarray as xr  # noqa: F401  (fail early with a clear message if absent)
     from concurrent.futures import ThreadPoolExecutor
 
-    # 1. Download every (variable, year) CONCURRENTLY. The CDS processes requests
-    #    server-side, so submitting them in parallel overlaps the queue waits
-    #    instead of paying them one after another. Cap concurrency at 4 to avoid
-    #    hammering the CDS per-user active-request queue.
+    # 1. Feed variable-year jobs through a bounded worker queue. The safe default
+    #    submits one request at a time; callers may opt into a small amount of
+    #    concurrency, subject to the package hard cap.
     point_series = {pid: {v: {} for v in _AGERA5_VARS} for pid in ids}
     pts_lat = None
 
@@ -585,14 +612,14 @@ def process_weather_agera5(
                 _download_agera5_var(cds_var, sel_kind, sel_value, year,
                                      area, agera5_cache_dir))
 
-    try:
-        requested_workers = int(n_cores)
-    except Exception:  # noqa: BLE001
-        requested_workers = 1
-    workers = max(1, min(requested_workers, _AGERA5_CDS_REQUEST_CAP, len(jobs)))
+    workers = _agera5_worker_count(
+        n_cores, agera5_max_concurrent_requests, len(jobs)
+    )
     print(
         f"  AgERA5 cache/download phase: {len(jobs)} variable-year job(s); "
-        f"using {workers} concurrent CDS request(s) (cap={_AGERA5_CDS_REQUEST_CAP})."
+        f"using {workers} concurrent CDS request(s) "
+        f"(configured maximum={int(agera5_max_concurrent_requests)}, "
+        f"hard cap={_AGERA5_CDS_REQUEST_CAP})."
     )
 
     paths = {}
