@@ -183,9 +183,11 @@ def test_agera5_timeseries_backend_dispatches_and_parses_csv(tmp_path, monkeypat
         1, str(tmp_path / "errors.log"), str(tmp_path / "cache"),
         agera5_backend="time-series", agera5_data_format="csv",
         agera5_timeseries_chunk_degrees=3.5,
+        agera5_max_concurrent_requests=2,
     )
     assert captured["agera5_data_format"] == "csv"
     assert captured["agera5_timeseries_chunk_degrees"] == 3.5
+    assert captured["agera5_max_concurrent_requests"] == 2
 
     csv_path = tmp_path / "agera5.csv"
     pd.DataFrame({
@@ -241,6 +243,79 @@ def test_agera5_cache_key_includes_geographic_area(tmp_path, monkeypatch):
         "temperature", None, None, 2010, [32, -102, 30, -100], str(tmp_path))
     assert first != second
     assert len(destinations) == 2
+
+
+def test_agera5_requests_match_current_v2_catalogue_forms(tmp_path, monkeypatch):
+    import dssatutils.weather_agera5 as agera5
+    import zipfile
+
+    calls = []
+
+    class Client:
+        def retrieve(self, dataset, request, destination):
+            calls.append((dataset, request.copy(), destination))
+            if dataset == agera5._CDS_DATASET:
+                with zipfile.ZipFile(destination, "w") as archive:
+                    archive.writestr("daily.nc", b"valid")
+            else:
+                pd.DataFrame({
+                    "valid_time": ["1993-01-01"],
+                    "latitude": [33.5],
+                    "longitude": [-102.5],
+                }).to_csv(destination, index=False)
+
+    monkeypatch.setattr(agera5, "_make_cds_client", lambda _: Client())
+    monkeypatch.setitem(sys.modules, "cdsapi", type("CDS", (), {})())
+    area = [33.8816, -102.7220, 33.4816, -102.3220]
+    assert agera5._download_agera5_var(
+        "2m_temperature", "statistic", "24_hour_maximum", 1993, area, str(tmp_path)
+    )
+    assert agera5._download_agera5_timeseries(1993, area, str(tmp_path), "csv")
+
+    grid_dataset, grid_request, _ = calls[0]
+    assert grid_dataset == "sis-agrometeorological-indicators"
+    assert grid_request["version"] == "2_0"
+    assert grid_request["variable"] == "2m_temperature"
+    assert grid_request["statistic"] == "24_hour_maximum"
+    assert len(grid_request["month"]) == 12 and len(grid_request["day"]) == 31
+
+    ts_dataset, ts_request, _ = calls[1]
+    assert ts_dataset == "sis-agrometeorological-indicators-timeseries"
+    assert ts_request["date"] == ["1993-01-01", "1993-12-31"]
+    assert ts_request["data_format"] == "csv"
+    assert len(ts_request["variable"]) == 7
+    assert "version" not in ts_request  # The ARCO product is already v2-only.
+
+
+def test_agera5_bounded_queue_and_hundreds_of_points():
+    import dssatutils.weather_agera5 as agera5
+
+    assert agera5._agera5_worker_count(64, 1, 500) == 1
+    assert agera5._agera5_worker_count(64, 3, 500) == 3
+    assert agera5._agera5_worker_count(64, 99, 500) == agera5._AGERA5_CDS_REQUEST_CAP
+    try:
+        agera5._agera5_worker_count(8, 0, 500)
+    except ValueError as exc:
+        assert "at least 1" in str(exc)
+    else:
+        raise AssertionError("zero AgERA5 concurrency was accepted")
+
+    # Exercise chunk assignment at scale, including points exactly on internal
+    # chunk boundaries. Every point must belong to one and only one request,
+    # and every requested area must respect the CDS 5 x 5 degree limit.
+    side = np.linspace(30.0, 43.5, 25)
+    lat_grid, lon_grid = np.meshgrid(side, np.linspace(-110.0, -96.5, 20))
+    lats = lat_grid.ravel()
+    lons = lon_grid.ravel()
+    chunks = agera5._split_agera5_timeseries_chunks(lats, lons, chunk_degrees=4.5)
+    counts = np.zeros(len(lats), dtype=int)
+    for chunk in chunks:
+        counts[chunk["idx"]] += 1
+        north, west, south, east = chunk["area"]
+        assert north - south <= 5.0 + 1e-12
+        assert east - west <= 5.0 + 1e-12
+    assert len(lats) == 500
+    assert np.all(counts == 1)
 
 
 def test_gridded_filename_matching_is_exact_and_multiyear(tmp_path):

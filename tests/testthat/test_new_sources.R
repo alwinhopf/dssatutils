@@ -237,7 +237,8 @@ test_that("CHIRPS v3 public path handles points outside its latitude coverage", 
 test_that("AgERA5 time-series helpers match the Python API and unit conversions", {
   args <- names(formals(process_weather_agera5))
   expect_true(all(c("agera5_backend", "agera5_data_format",
-                    "agera5_timeseries_chunk_degrees") %in% args))
+                    "agera5_timeseries_chunk_degrees",
+                    "agera5_max_concurrent_requests") %in% args))
 
   chunks <- dssatutils:::.agera5_split_timeseries_chunks(
     c(40, 40.1), c(-90, -89.9), chunk_degrees = 3.5
@@ -262,6 +263,28 @@ test_that("AgERA5 time-series helpers match the Python API and unit conversions"
   expect_equal(parsed$DATE, "2010001")
   expect_equal(parsed$TMAX, 26.85, tolerance = 1e-9)
   expect_equal(parsed$SRAD, 12)
+})
+
+test_that("AgERA5 request queues stay bounded for hundreds of points", {
+  expect_equal(dssatutils:::.agera5_worker_count(64, 1, 500), 1)
+  expect_equal(dssatutils:::.agera5_worker_count(64, 3, 500), 3)
+  expect_equal(dssatutils:::.agera5_worker_count(64, 99, 500),
+               dssatutils:::AGERA5_CDS_REQUEST_CAP)
+  expect_error(dssatutils:::.agera5_worker_count(8, 0, 500), "at least 1")
+
+  grid <- expand.grid(LAT = seq(30, 43.5, length.out = 25),
+                      LONG = seq(-110, -96.5, length.out = 20))
+  chunks <- dssatutils:::.agera5_split_timeseries_chunks(
+    grid$LAT, grid$LONG, chunk_degrees = 4.5
+  )
+  counts <- integer(nrow(grid))
+  for (chunk in chunks) {
+    counts[chunk$idx] <- counts[chunk$idx] + 1L
+    expect_lte(chunk$area[1] - chunk$area[3], 5 + 1e-12)
+    expect_lte(chunk$area[4] - chunk$area[2], 5 + 1e-12)
+  }
+  expect_equal(nrow(grid), 500)
+  expect_true(all(counts == 1L))
 })
 
 test_that("AgERA5 time-series backend writes a complete weather file", {

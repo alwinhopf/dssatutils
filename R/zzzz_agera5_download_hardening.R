@@ -161,17 +161,7 @@
   # Ask ecmwfr for the canonical ZIP path.  Its own downloader already stages
   # to a temporary file before moving the completed transfer into place.
   if (file.exists(job$zip_dest)) unlink(job$zip_dest)
-  req <- list(
-    dataset_short_name = "sis-agrometeorological-indicators",
-    variable = job$spec$var,
-    year = as.character(job$yr),
-    month = sprintf("%02d", 1:12),
-    day = sprintf("%02d", 1:31),
-    area = job$area,
-    version = "2_0",
-    target = basename(job$zip_dest)
-  )
-  if (!is.na(job$spec$sel_kind)) req[[job$spec$sel_kind]] <- job$spec$sel
+  req <- .agera5_gridded_request(job, basename(job$zip_dest))
 
   transfer <- .agera5_wf_request_with_retry(
     request = req,
@@ -263,14 +253,7 @@
     }
   }
 
-  req <- list(
-    dataset_short_name = "sis-agrometeorological-indicators-timeseries",
-    variable = vapply(.agera5_timeseries_vars, `[[`, character(1), "var"),
-    date = unname(bounds),
-    data_format = data_format,
-    area = as.numeric(job$area),
-    target = basename(dest)
-  )
+  req <- .agera5_timeseries_request(job, basename(dest))
 
   transfer <- .agera5_wf_request_with_retry(
     request = req,

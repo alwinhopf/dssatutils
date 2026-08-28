@@ -101,6 +101,21 @@ The helper uses `CDSAPI_KEY`/`CDSAPI_URL`, imports an existing `~/.cdsapirc`, or
 prompts in an interactive session. It writes a cdsapi-compatible `.cdsapirc`;
 the R helper also stores the token for `ecmwfr`.
 
+AgERA5 uses the current v2.0 gridded product by default. For many points in a
+limited region, the optional v2-backed ARCO time-series product can reduce the
+number of CDS jobs by requesting all seven DSSAT weather variables together:
+
+```r
+process_weather_agera5(...,
+  agera5_backend = "timeseries",
+  agera5_max_concurrent_requests = 1)
+```
+
+Both backends use a bounded request queue, validate cached downloads, and retry
+transient CDS throttling. The time-series backend partitions points into areas
+no larger than the catalogue's 5 x 5 degree limit. Increase concurrency only
+deliberately; the package enforces a hard ceiling of four concurrent requests.
+
 ## Configuration
 
 Package-level defaults live in `config.yml` and are read by both R and Python.

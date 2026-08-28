@@ -3,7 +3,7 @@ library(dssatutils)
 
 test_that("final AgERA5 gridded downloader is self-contained for PSOCK export", {
   body_txt <- paste(deparse(body(dssatutils:::.agera5_download_job)), collapse = "\n")
-  expect_match(body_txt, "target = basename\\(job\\$zip_dest\\)")
+  expect_match(body_txt, "\\.agera5_gridded_request\\(job, basename\\(job\\$zip_dest\\)\\)")
   expect_false(grepl("basename\\(partial\\)", body_txt))
   expect_false(grepl("\\.agera5_recover_cache_zip\\(", body_txt))
   expect_match(body_txt, "valid_zip <- function")
@@ -12,12 +12,37 @@ test_that("final AgERA5 gridded downloader is self-contained for PSOCK export", 
 
 test_that("AgERA5 time-series downloader requests canonical CSV target", {
   body_txt <- paste(deparse(body(dssatutils:::.agera5_download_timeseries_job)), collapse = "\n")
-  expect_match(body_txt, "target = basename\\(dest\\)")
+  expect_match(body_txt, "\\.agera5_timeseries_request\\(job, basename\\(dest\\)\\)")
   expect_false(grepl("target = basename\\(partial\\)", body_txt))
   expect_match(body_txt, "paste0\\(dest")
   expect_match(body_txt, "\\.csv")
 })
 
+test_that("AgERA5 request builders match current CDS catalogue forms", {
+  gridded_job <- dssatutils:::.agera5_job(
+    "TMAX", 1993, dssatutils:::.agera5_vars$TMAX,
+    c(33.8816, -102.7220, 33.4816, -102.3220), tempdir()
+  )
+  gridded <- dssatutils:::.agera5_gridded_request(gridded_job, "agera5.zip")
+  expect_equal(gridded$dataset_short_name, "sis-agrometeorological-indicators")
+  expect_equal(gridded$version, "2_0")
+  expect_equal(gridded$variable, "2m_temperature")
+  expect_equal(gridded$statistic, "24_hour_maximum")
+  expect_equal(length(gridded$month), 12)
+  expect_equal(length(gridded$day), 31)
+
+  timeseries_job <- list(
+    year = 1993, area = c(33.8816, -102.7220, 33.4816, -102.3220),
+    data_format = "csv"
+  )
+  timeseries <- dssatutils:::.agera5_timeseries_request(timeseries_job, "agera5.csv")
+  expect_equal(timeseries$dataset_short_name,
+               "sis-agrometeorological-indicators-timeseries")
+  expect_equal(timeseries$data_format, "csv")
+  expect_equal(timeseries$date, c("1993-01-01", "1993-12-31"))
+  expect_equal(length(timeseries$variable), 7)
+  expect_false("version" %in% names(timeseries))
+})
 test_that("AgERA5 retries a throttled submission with server-aware backoff", {
   calls <- 0L
   waits <- numeric()
