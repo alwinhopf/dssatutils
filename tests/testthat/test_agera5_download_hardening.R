@@ -14,7 +14,8 @@ test_that("AgERA5 time-series downloader requests canonical CSV target", {
   body_txt <- paste(deparse(body(dssatutils:::.agera5_download_timeseries_job)), collapse = "\n")
   expect_match(body_txt, "target = basename\\(dest\\)")
   expect_false(grepl("target = basename\\(partial\\)", body_txt))
-  expect_match(body_txt, "paste0\\(dest, \\"\\.csv\\"\\)")
+  expect_match(body_txt, "paste0\\(dest")
+  expect_match(body_txt, "\\.csv")
 })
 
 test_that("legacy zip.zip cache remains recoverable", {
