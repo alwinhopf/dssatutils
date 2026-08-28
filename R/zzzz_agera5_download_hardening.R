@@ -7,6 +7,108 @@
 # so `.agera5_download_job` also works when exported to a PSOCK worker: the
 # worker does not need additional cache-helper functions exported separately.
 
+.agera5_cds_job_url <- function(message) {
+  hit <- regexpr(
+    "https://cds\\.climate\\.copernicus\\.eu/api/retrieve/v1/jobs/[0-9A-Fa-f-]{36}",
+    message,
+    perl = TRUE
+  )
+  if (hit[[1]] < 0L) return(NULL)
+  regmatches(message, hit)[[1]]
+}
+
+.agera5_cds_retry_delay <- function(message, attempt,
+                                    base_seconds = 2,
+                                    max_seconds = 60) {
+  wait_hit <- regexec("Please wait[[:space:]]+([0-9]+)[[:space:]]+seconds?", message,
+                      ignore.case = TRUE, perl = TRUE)
+  wait_parts <- regmatches(message, wait_hit)[[1]]
+  server_wait <- if (length(wait_parts) >= 2L) suppressWarnings(as.numeric(wait_parts[[2]])) else 0
+  if (!is.finite(server_wait)) server_wait <- 0
+  exponential <- min(as.numeric(max_seconds),
+                     as.numeric(base_seconds) * 2^(max(1L, as.integer(attempt)) - 1L))
+  max(1, server_wait, exponential)
+}
+
+.agera5_cds_transient_error <- function(message) {
+  grepl(
+    paste(c(
+      "(^|[^0-9])429([^0-9]|$)", "rate[ -]?limit", "too many requests",
+      "(^|[^0-9])50[234]([^0-9]|$)", "temporar", "timed?[ -]?out",
+      "timeout", "connection reset", "connection error", "unavailable"
+    ), collapse = "|"),
+    message,
+    ignore.case = TRUE,
+    perl = TRUE
+  )
+}
+
+.agera5_wf_request_with_retry <- function(request, path, target,
+                                          request_fn = NULL,
+                                          resume_fn = NULL,
+                                          sleep_fn = Sys.sleep,
+                                          max_attempts = NULL) {
+  if (is.null(request_fn)) {
+    request_fn <- function(request, path) {
+      # A one-minute status interval materially reduces pressure on the CDS job
+      # endpoint compared with ecmwfr's default 30-second polling interval.
+      ecmwfr::wf_request(request = request, path = path, retry = 60, verbose = FALSE)
+    }
+  }
+  if (is.null(resume_fn)) {
+    resume_fn <- function(url, path, target) {
+      ecmwfr::wf_transfer(url = url, path = path, filename = target, verbose = FALSE)
+    }
+  }
+
+  if (is.null(max_attempts)) {
+    max_attempts <- suppressWarnings(as.integer(Sys.getenv("AGERA5_CDS_MAX_ATTEMPTS", "8")))
+  }
+  if (is.na(max_attempts) || max_attempts < 1L) max_attempts <- 8L
+  base_seconds <- suppressWarnings(as.numeric(Sys.getenv("AGERA5_CDS_RETRY_BASE_SECONDS", "2")))
+  max_seconds <- suppressWarnings(as.numeric(Sys.getenv("AGERA5_CDS_RETRY_MAX_SECONDS", "60")))
+  if (!is.finite(base_seconds) || base_seconds <= 0) base_seconds <- 2
+  if (!is.finite(max_seconds) || max_seconds < base_seconds) max_seconds <- max(60, base_seconds)
+
+  job_url <- NULL
+  last_error <- NULL
+  for (attempt in seq_len(max_attempts)) {
+    err <- NULL
+    returned <- tryCatch(
+      if (is.null(job_url)) {
+        request_fn(request, path)
+      } else {
+        resume_fn(job_url, path, target)
+      },
+      error = function(e) {
+        err <<- conditionMessage(e)
+        NULL
+      }
+    )
+    if (is.null(err)) {
+      return(list(value = returned, error = NULL, job_url = job_url,
+                  attempts = attempt))
+    }
+
+    last_error <- err
+    discovered_url <- .agera5_cds_job_url(err)
+    if (!is.null(discovered_url)) job_url <- discovered_url
+    retryable <- !is.null(job_url) || .agera5_cds_transient_error(err)
+    if (!retryable || attempt >= max_attempts) break
+
+    delay <- .agera5_cds_retry_delay(err, attempt, base_seconds, max_seconds)
+    message(sprintf(
+      "  AgERA5 CDS request throttled/transient failure; retrying %s in %.0f s (attempt %d/%d).",
+      if (is.null(job_url)) "submission" else "existing job",
+      delay, attempt + 1L, max_attempts
+    ))
+    sleep_fn(delay)
+  }
+
+  list(value = NULL, error = last_error, job_url = job_url,
+       attempts = max_attempts)
+}
+
 .agera5_download_job <- function(job) {
   valid_zip <- function(path) {
     if (!file.exists(path)) return(FALSE)
@@ -71,14 +173,13 @@
   )
   if (!is.na(job$spec$sel_kind)) req[[job$spec$sel_kind]] <- job$spec$sel
 
-  err <- NULL
-  returned <- tryCatch(
-    ecmwfr::wf_request(request = req, path = job$cache_dir),
-    error = function(e) {
-      err <<- conditionMessage(e)
-      NULL
-    }
+  transfer <- .agera5_wf_request_with_retry(
+    request = req,
+    path = job$cache_dir,
+    target = basename(job$zip_dest)
   )
+  returned <- transfer$value
+  err <- transfer$error
 
   # wf_request() returns the actual downloaded filename.  Prefer that path and
   # normalize it into our canonical cache name if ecmwfr changed it anyway.
@@ -171,14 +272,13 @@
     target = basename(dest)
   )
 
-  err <- NULL
-  returned <- tryCatch(
-    ecmwfr::wf_request(request = req, path = job$cache_dir),
-    error = function(e) {
-      err <<- conditionMessage(e)
-      NULL
-    }
+  transfer <- .agera5_wf_request_with_retry(
+    request = req,
+    path = job$cache_dir,
+    target = basename(dest)
   )
+  returned <- transfer$value
+  err <- transfer$error
 
   if (is.character(returned) && length(returned)) {
     for (candidate in returned[nzchar(returned)]) {
