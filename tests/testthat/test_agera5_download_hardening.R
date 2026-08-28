@@ -18,6 +18,74 @@ test_that("AgERA5 time-series downloader requests canonical CSV target", {
   expect_match(body_txt, "\\.csv")
 })
 
+test_that("AgERA5 retries a throttled submission with server-aware backoff", {
+  calls <- 0L
+  waits <- numeric()
+  request_fn <- function(request, path) {
+    calls <<- calls + 1L
+    if (calls == 1L) stop("429 Rate limit exceeded. Please wait 1 seconds.")
+    "download.zip"
+  }
+
+  result <- dssatutils:::.agera5_wf_request_with_retry(
+    request = list(), path = tempdir(), target = "download.zip",
+    request_fn = request_fn,
+    resume_fn = function(...) stop("resume should not be called"),
+    sleep_fn = function(seconds) waits <<- c(waits, seconds),
+    max_attempts = 3L
+  )
+
+  expect_equal(result$value, "download.zip")
+  expect_null(result$error)
+  expect_equal(calls, 2L)
+  expect_equal(waits, 2)
+})
+
+test_that("AgERA5 resumes the submitted CDS job instead of duplicating it after 429", {
+  job_url <- paste0(
+    "https://cds.climate.copernicus.eu/api/retrieve/v1/jobs/",
+    "aa31ed9e-6a7f-423d-a9e6-a82b35d3f252"
+  )
+  submissions <- 0L
+  resumes <- 0L
+  request_fn <- function(request, path) {
+    submissions <<- submissions + 1L
+    stop(paste("429 Rate limit exceeded. Please wait 0 seconds.", job_url))
+  }
+  resume_fn <- function(url, path, target) {
+    resumes <<- resumes + 1L
+    expect_equal(url, job_url)
+    if (resumes == 1L) stop("Your requested file is unavailable - check url")
+    invisible(list(asset = target))
+  }
+
+  result <- dssatutils:::.agera5_wf_request_with_retry(
+    request = list(), path = tempdir(), target = "download.zip",
+    request_fn = request_fn, resume_fn = resume_fn,
+    sleep_fn = function(seconds) NULL, max_attempts = 4L
+  )
+
+  expect_null(result$error)
+  expect_equal(result$job_url, job_url)
+  expect_equal(submissions, 1L)
+  expect_equal(resumes, 2L)
+})
+
+test_that("AgERA5 does not retry permanent request errors", {
+  calls <- 0L
+  result <- dssatutils:::.agera5_wf_request_with_retry(
+    request = list(), path = tempdir(), target = "download.zip",
+    request_fn = function(request, path) {
+      calls <<- calls + 1L
+      stop("required licences not accepted")
+    },
+    sleep_fn = function(seconds) stop("sleep should not be called"),
+    max_attempts = 3L
+  )
+  expect_equal(calls, 1L)
+  expect_match(result$error, "licences not accepted")
+})
+
 test_that("legacy zip.zip cache remains recoverable", {
   skip_if(!nzchar(Sys.which("zip")), "system zip utility is required")
   work <- tempfile("agera5-hardening-")
