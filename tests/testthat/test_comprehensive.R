@@ -240,9 +240,15 @@ test_that("process_weather_agera5 runs successfully with mocks", {
   shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
   log_file <- file.path(work_dir, "error.log")
 
+  # The network/cache contract is tested separately. Keep this comprehensive
+  # formatter test independent of CDS credentials and archive creation.
   local_mocked_bindings(
-    wf_request = function(...) 0,
-    .package = "ecmwfr"
+    .agera5_ensure_ecmwfr_key = function(...) invisible(TRUE),
+    .agera5_download_job = function(job) {
+      list(ok = TRUE, cached = FALSE, job = job, data_files = "mock.zip",
+           message = "mock AgERA5 download")
+    },
+    .package = "dssatutils"
   )
   
   local_mocked_bindings(
