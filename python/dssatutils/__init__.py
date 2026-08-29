@@ -11,7 +11,7 @@ missing, submodules are imported lazily via ``__getattr__`` (PEP 562).
 """
 from importlib import import_module
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # public name -> submodule that defines it
 _EXPORTS = {
@@ -44,6 +44,7 @@ _EXPORTS = {
     "process_weather_ghcn": "weather_ghcn",
     "process_weather_pgf": "weather_pgf",
     "process_weather_merra2": "weather_merra2",
+    "is_wth_valid": "weather_validation",
     "setup_cds_credentials": "credentials",
     "era5land_set_cds_key": "credentials",
     "repair_weather_missing_values": "weather_repair",

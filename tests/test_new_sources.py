@@ -206,6 +206,25 @@ def test_agera5_timeseries_backend_dispatches_and_parses_csv(tmp_path, monkeypat
     assert parsed.loc[0, "SRAD"] == 12.0
 
 
+def test_agera5_timeseries_cache_chunks_are_global_grid_anchored():
+    import dssatutils.weather_agera5 as agera5
+
+    first = agera5._split_agera5_timeseries_chunks(
+        np.array([33.6816]), np.array([-102.5220]), chunk_degrees=0.1
+    )
+    same_cell = agera5._split_agera5_timeseries_chunks(
+        np.array([33.7040]), np.array([-102.4960]), chunk_degrees=0.1
+    )
+    adjacent = agera5._split_agera5_timeseries_chunks(
+        np.array([33.7510]), np.array([-102.4490]), chunk_degrees=0.1
+    )
+    assert np.allclose(first[0]["area"], [33.75, -102.55, 33.65, -102.45])
+    assert first[0]["area"][0] > first[0]["area"][2]
+    assert first[0]["area"][3] > first[0]["area"][1]
+    assert np.allclose(same_cell[0]["area"], first[0]["area"])
+    assert not np.allclose(adjacent[0]["area"], first[0]["area"])
+
+
 def test_agera5_rejects_unknown_backend_before_network(tmp_path):
     import dssatutils.weather_agera5 as agera5
 

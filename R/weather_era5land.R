@@ -349,31 +349,7 @@ process_weather_era5_land <- function(shapefile,
   lats <- coords_list$lats
   lons <- coords_list$lons
 
-  cl <- parallel::makeCluster(n_cores)
-  doParallel::registerDoParallel(cl)
-  on.exit(parallel::stopCluster(cl), add = TRUE)
-
-  # Export required internal functions and package names to parallel workers
-  parallel::clusterExport(
-    cl,
-    varlist = c(
-      ".download_era5_land_point_csv", ".build_era5_land_request",
-      ".read_era5_land_hourly_csv", ".parse_hourly_datetime",
-      ".find_first_matching_column", ".ensure_numeric",
-      ".aggregate_era5_land_to_daily", ".fill_na_with_neighbor_mean",
-      ".calc_rh_from_temp_dew", ".write_dssat_weather_file",
-      ".log_worker_message", ".dssatutils_cds_default_url",
-      ".dssatutils_cds_rc_candidates", ".dssatutils_read_cdsapirc",
-      ".dssatutils_prompt_secret", "setup_cds_credentials",
-      ".dssatutils_ensure_cds_credentials", "cds_user"
-    ),
-    envir = environment()
-  )
-
-  foreach::foreach(
-    i = seq_along(ids),
-    .packages = c("ecmwfr", "readr", "dplyr", "lubridate")
-  ) %dopar% {
+  .process_one <- function(i) {
     latitude <- lats[i]
     longitude <- lons[i]
     point_id <- ids[i]
@@ -425,6 +401,41 @@ process_weather_era5_land <- function(shapefile,
       .log_worker_message(log_file, "ERROR", point_id, conditionMessage(e))
       NULL
     })
+  }
+
+  requested_cores <- suppressWarnings(as.integer(n_cores))
+  if (is.na(requested_cores) || requested_cores < 1L) requested_cores <- 1L
+  if (requested_cores == 1L || length(ids) <= 1L) {
+    # Keep one-core operation in the current process. Besides avoiding PSOCK
+    # startup overhead, this makes debugging and mocked/offline tests reliable.
+    lapply(seq_along(ids), .process_one)
+  } else {
+    cl <- parallel::makeCluster(min(requested_cores, length(ids)))
+    doParallel::registerDoParallel(cl)
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+
+    # Export required internal functions and package names to parallel workers.
+    parallel::clusterExport(
+      cl,
+      varlist = c(
+        ".download_era5_land_point_csv", ".build_era5_land_request",
+        ".read_era5_land_hourly_csv", ".parse_hourly_datetime",
+        ".find_first_matching_column", ".ensure_numeric",
+        ".aggregate_era5_land_to_daily", ".fill_na_with_neighbor_mean",
+        ".calc_rh_from_temp_dew", ".write_dssat_weather_file",
+        ".log_worker_message", ".dssatutils_cds_default_url",
+        ".dssatutils_cds_rc_candidates", ".dssatutils_read_cdsapirc",
+        ".dssatutils_prompt_secret", "setup_cds_credentials",
+        ".dssatutils_ensure_cds_credentials", "cds_user"
+      ),
+      envir = environment()
+    )
+
+    foreach::foreach(
+      i = seq_along(ids),
+      .packages = c("ecmwfr", "readr", "dplyr", "lubridate"),
+      .export = ".process_one"
+    ) %dopar% .process_one(i)
   }
 
   invisible(TRUE)

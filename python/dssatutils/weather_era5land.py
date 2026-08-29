@@ -332,7 +332,12 @@ def process_weather_era5_land(
             _log_worker_message(log_file, "ERROR", point_id, str(e))
             print(f"Point {point_id} failed: {e}")
 
-    with ThreadPoolExecutor(max_workers=min(n_cores, len(jobs))) as executor:
-        executor.map(_process_one, jobs)
+    requested_cores = max(1, int(n_cores))
+    if requested_cores == 1 or len(jobs) == 1:
+        for job in jobs:
+            _process_one(job)
+    else:
+        with ThreadPoolExecutor(max_workers=min(requested_cores, len(jobs))) as executor:
+            list(executor.map(_process_one, jobs))
 
     print(f"ERA5-Land weather processing complete. Output: {output_dir}")

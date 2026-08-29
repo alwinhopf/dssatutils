@@ -1,7 +1,7 @@
 Package: dssatutils
 Type: Package
 Title: Shared Weather and Soil Download Utilities for DSSAT
-Version: 0.4.0
+Version: 0.5.0
 Authors@R: person("Alwin", "Hopf", email = "alwinhopf@gmail.com", role = c("aut", "cre"))
 Author: Alwin Hopf
 Maintainer: Alwin Hopf <alwinhopf@gmail.com>

@@ -114,6 +114,16 @@ Currently configured package defaults include CDS URL, Open-Meteo rate-limit
 settings, CHIRPS v3 product/cache/download settings, and SoilGrids Online
 REST/VRT behavior.
 
+For AgERA5, consumer pipelines should prefer `agera5_backend = "timeseries"`.
+The time-series backend requests all seven DSSAT weather variables together and
+stores CSVs by year and globally anchored AgERA5 grid chunk. With
+`agera5_timeseries_chunk_degrees = 0.1`, each cache entry represents one
+canonical 0.1-degree AgERA5 cell, so crops, soils, point subsets, and model-grid
+resolutions that select the same cell reuse the same download. Larger values
+group cells into fixed global tiles and reduce request count at the cost of more
+downloaded data. The legacy `gridded` backend remains available for callers that
+need the original daily-NetCDF ZIPs.
+
 ## Versioning
 
 Semantic versioning with Git tags. **Consumer repos always pin to a tag**
@@ -128,7 +138,18 @@ deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
   `repair_weather_temperature_inversions()`, and `audit_weather_quality()`.
   Repair functions only modify short runs with valid before/after neighbors;
   the audit writes flag-only findings to CSV and appends notes to
-  `weather_repair.log`.
+  `weather_repair.log`. Provider `NA`/`NaN`/infinite values are normalized to
+  DSSAT's numeric `-99` marker before writing, and the repair reader also accepts
+  those literal tokens in older cached files.
+- **Weather-file validation** via `is_wth_valid()` understands DSSAT's
+  fixed-width daily rows (including adjacent negative fields), requires
+  consecutive dates, and rejects physically impossible forcing while retaining
+  the standard `-99` missing-value sentinel. Callers can pass
+  `required_columns` to reject `-99` in model-essential fields while still
+  permitting optional missing humidity/wind inputs. AgERA5 applies the same
+  physical checks before writing. Its recommended time-series cache uses globally
+  anchored 0.1-degree cells or fixed tiles; the legacy gridded cache remains
+  keyed by the exact requested geographic area.
 - **GridMET** RH2M and TDEW are *estimated* (`TDEW ≈ TMIN − 2.5`, RH from the
   diurnal temperature range), not measured.
 - **Open-Meteo** uses the API's `dew_point_2m_mean` and

@@ -81,6 +81,31 @@ test_that("date gap repair inserts missing DSSAT date row from neighbor means", 
   expect_true(any(grepl("issue=DATE_GAP status=repaired", readLines(log_file))))
 })
 
+test_that("missing-value repair accepts literal provider NA tokens", {
+  wth <- tempfile(fileext = ".WTH")
+  writeLines(c(
+    "$WEATHER DATA: TEST",
+    "@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT",
+    "  TEST   0.0000   0.0000   -99  20.0  10.0   2.0   2.0",
+    "@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+    "2024001  10.0  20.0  10.0   0.0   8.0  60.0   2.0",
+    "2024002  12.0  22.0  12.0   0.0   9.0  60.0   2.0",
+    "2024003    NA  23.0  13.0   0.0  10.0  60.0   2.0",
+    "2024004  14.0  24.0  14.0   0.0  11.0  60.0   2.0",
+    "2024005  16.0  26.0  16.0   0.0  12.0  60.0   2.0"
+  ), wth, useBytes = TRUE)
+
+  summary <- repair_weather_file_missing_values(
+    wth, max_gap_days = 3, window_days = 2, variables = "SRAD"
+  )
+
+  expect_equal(summary$status, "repaired")
+  expect_equal(summary$repaired_count, 1L)
+  repaired <- readLines(wth, warn = FALSE)
+  expect_true(any(grepl("^2024003\\s+13\\.0", repaired)))
+  expect_false(any(grepl("\\bNA\\b", repaired)))
+})
+
 test_that("weather quality audit flags suspicious rows without modifying file", {
   wth <- tempfile(fileext = ".WTH")
   writeLines(c(

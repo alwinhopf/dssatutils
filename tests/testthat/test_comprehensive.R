@@ -241,14 +241,27 @@ test_that("process_weather_agera5 runs successfully with mocks", {
   log_file <- file.path(work_dir, "error.log")
 
   local_mocked_bindings(
-    wf_request = function(...) 0,
-    .package = "ecmwfr"
+    .agera5_download_job = function(job) list(
+      ok = TRUE, cached = TRUE, job = job,
+      data_files = paste0("fake_", job$tag, ".nc"), message = "mock cache hit"
+    ),
+    .package = "dssatutils"
   )
   
   local_mocked_bindings(
     vect = function(...) "mock_vect",
-    extract = function(...) matrix(c(298.15, 299.15), nrow = 1),
-    rast = function(...) "mock_rast",
+    extract = function(r, ...) {
+      value <- if (grepl("24_hour_maximum", r, fixed = TRUE)) 298.15
+      else if (grepl("24_hour_minimum", r, fixed = TRUE)) 288.15
+      else if (grepl("solar_radiation", r, fixed = TRUE)) 15e6
+      else if (grepl("precipitation", r, fixed = TRUE)) 2
+      else if (grepl("dewpoint", r, fixed = TRUE)) 283.15
+      else if (grepl("relative_humidity", r, fixed = TRUE)) 60
+      else if (grepl("wind_speed", r, fixed = TRUE)) 3
+      else stop("unexpected mocked AgERA5 variable")
+      matrix(rep(value, 2), nrow = 1)
+    },
+    rast = function(path) path,
     time = function(...) as.Date(c("2010-01-01", "2010-01-02")),
     .package = "terra"
   )

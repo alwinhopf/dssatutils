@@ -5,6 +5,7 @@
 \alias{era5land_set_cds_key}
 \alias{extract_chirps_v3_rainfall}
 \alias{merge_rainfall_into_weather}
+\alias{is_wth_valid}
 \alias{process_soils_agmip}
 \alias{process_soils_china}
 \alias{process_soils_esdb}

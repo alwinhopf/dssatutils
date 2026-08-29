@@ -81,8 +81,13 @@ def _fetch_nasa_power(lat: float, lon: float, start: str, end: str,
             df["DOY"] = df.index.day_of_year
             df["DATE"] = df["YEAR"].astype(str) + df["DOY"].astype(str).str.zfill(3)
             df = df.reset_index(drop=True)
-            # Replace NASA missing-value sentinel (-999) with -99
+            # Replace NASA's documented sentinel and occasional JSON nulls with
+            # DSSAT's numeric missing marker. Literal NaN/Inf tokens corrupt the
+            # fixed-width WTH row and cannot be repaired reliably downstream.
             df = df.replace(-999, -99)
+            for column in _NASA_PARAMS:
+                values = pd.to_numeric(df[column], errors="coerce")
+                df[column] = values.where(np.isfinite(values), -99.0)
             return df
         except Exception as exc:
             if attempt < retries - 1:

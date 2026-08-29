@@ -172,6 +172,18 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
         weather_data$RAIN[hit] <- as.numeric(cr[idx[hit]])
         n_chirps <- sum(hit)
       }
+
+      # NASA POWER occasionally returns a true NA rather than its documented
+      # -999 sentinel for an otherwise complete day. Keep the WTH numeric so it
+      # can be validated, repaired (when enabled), or rejected cleanly by DSSAT.
+      weather_data <- .normalize_weather_missing_values(
+        weather_data,
+        point_id = point_id,
+        output_file = output_file,
+        output_dir = output_dir,
+        source_label = "NASA_POWER_CHIRPS"
+      )
+
       rain_src <- if (n_chirps > 0)
         sprintf("CHIRPS(%s) where available, %d days; NASA-POWER otherwise", res, n_chirps)
       else "NASA-POWER (CHIRPS unavailable here)"

@@ -46,7 +46,8 @@
 
 AGERA5_TIMESERIES_MAX_EXTENT_DEG <- 5.0
 AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG <- 4.5
-AGERA5_TIMESERIES_PAD_DEG <- 0.2
+AGERA5_TIMESERIES_PAD_DEG <- 0.0
+AGERA5_GRID_DEG <- 0.1
 
 .agera5_data_files <- function(nc_path, zip_path, unzip_dir) {
   if (file.exists(nc_path) && file.info(nc_path)$size > 0) return(nc_path)
@@ -160,38 +161,57 @@ AGERA5_CDS_REQUEST_CAP <- 4L
 .agera5_split_timeseries_chunks <- function(lats, lons,
                                             chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
                                             pad = AGERA5_TIMESERIES_PAD_DEG) {
+  lats <- as.numeric(lats)
+  lons <- as.numeric(lons)
   chunk_degrees <- as.numeric(chunk_degrees)
   pad <- as.numeric(pad)
+  if (!length(lats) || length(lats) != length(lons) ||
+      any(!is.finite(lats)) || any(!is.finite(lons)) ||
+      any(lats < -90 | lats > 90) || any(lons < -180 | lons > 180)) {
+    stop("AgERA5 coordinates must be finite paired latitude/longitude values.", call. = FALSE)
+  }
   if (!is.finite(chunk_degrees) || chunk_degrees <= 0) {
     stop("agera5_timeseries_chunk_degrees must be a positive number.", call. = FALSE)
   }
   if (!is.finite(pad) || pad < 0) stop("AgERA5 chunk padding must be non-negative.", call. = FALSE)
-  max_raw <- max(0.1, AGERA5_TIMESERIES_MAX_EXTENT_DEG - 2 * pad)
-  step <- min(max(0.1, chunk_degrees), max_raw)
-  lat_min <- min(lats); lat_max <- max(lats)
-  lon_min <- min(lons); lon_max <- max(lons)
+  max_raw <- max(AGERA5_GRID_DEG, AGERA5_TIMESERIES_MAX_EXTENT_DEG - 2 * pad)
+  cells_per_chunk <- max(1L, as.integer(round(chunk_degrees / AGERA5_GRID_DEG)))
+  cells_per_chunk <- min(cells_per_chunk,
+                         max(1L, as.integer(floor(max_raw / AGERA5_GRID_DEG))))
+
+  # Snap to AgERA5's fixed global 0.1-degree lattice and use globally anchored
+  # chunks. Cache paths then remain stable across point subsets and resolutions.
+  lat_cell <- pmin(90, pmax(-90, round(lats / AGERA5_GRID_DEG) * AGERA5_GRID_DEG))
+  lon_cell <- pmin(179.9, pmax(-180, round(lons / AGERA5_GRID_DEG) * AGERA5_GRID_DEG))
+  lat_idx <- as.integer(round((lat_cell + 90) / AGERA5_GRID_DEG))
+  lon_idx <- as.integer(round((lon_cell + 180) / AGERA5_GRID_DEG))
+  lat_chunk <- lat_idx %/% cells_per_chunk
+  lon_chunk <- lon_idx %/% cells_per_chunk
+  keys <- paste(lat_chunk, lon_chunk, sep = ":")
+
   chunks <- list()
-  south <- lat_min
-  repeat {
-    north <- min(lat_max, south + step)
-    west <- lon_min
-    repeat {
-      east <- min(lon_max, west + step)
-      idx <- which(lats >= south - 1e-12 & lats <= north + 1e-12 &
-                   lons >= west - 1e-12 & lons <= east + 1e-12)
-      if (length(idx)) {
-        chunks[[length(chunks) + 1L]] <- list(
-          idx = idx,
-          bounds = c(south = south, west = west, north = north, east = east),
-          area = c(min(90, north + pad), max(-180, west - pad),
-                   max(-90, south - pad), min(179.9, east + pad))
-        )
-      }
-      if (east >= lon_max) break
-      west <- east
-    }
-    if (north >= lat_max) break
-    south <- north
+  for (key in sort(unique(keys))) {
+    idx <- which(keys == key)
+    south_idx <- min(lat_chunk[idx]) * cells_per_chunk
+    west_idx <- min(lon_chunk[idx]) * cells_per_chunk
+    north_idx <- min(1800L, south_idx + cells_per_chunk - 1L)
+    east_idx <- min(3599L, west_idx + cells_per_chunk - 1L)
+    south <- -90 + south_idx * AGERA5_GRID_DEG
+    north <- -90 + north_idx * AGERA5_GRID_DEG
+    west <- -180 + west_idx * AGERA5_GRID_DEG
+    east <- -180 + east_idx * AGERA5_GRID_DEG
+    chunks[[length(chunks) + 1L]] <- list(
+      idx = idx,
+      bounds = c(south = south, west = west, north = north, east = east),
+      # CDS rejects a degenerate area (north == south or west == east).  Treat
+      # the snapped values as grid-cell centres and request their half-cell
+      # envelope.  A 0.1-degree chunk therefore remains exactly one canonical
+      # AgERA5 cell while satisfying the API's area geometry.
+      area = c(min(90, north + AGERA5_GRID_DEG / 2 + pad),
+               max(-180, west - AGERA5_GRID_DEG / 2 - pad),
+               max(-90, south - AGERA5_GRID_DEG / 2 - pad),
+               min(179.9, east + AGERA5_GRID_DEG / 2 + pad))
+    )
   }
   chunks
 }
@@ -233,11 +253,26 @@ AGERA5_CDS_REQUEST_CAP <- 4L
     target = basename(partial)
   )
   err <- NULL
-  tryCatch(
+  downloaded <- tryCatch(
     ecmwfr::wf_request(request = req, path = job$cache_dir),
-    error = function(e) err <<- conditionMessage(e)
+    error = function(e) {
+      err <<- conditionMessage(e)
+      NULL
+    }
   )
-  if (valid_csv(partial) && file.rename(partial, dest)) return(dest)
+  # ecmwfr may normalize the target extension (for example, changing
+  # `file.csv.partial` to `file.csv.csv`). Prefer the path it returns instead
+  # of assuming that the requested temporary name was preserved.
+  candidates <- unique(c(partial, as.character(unlist(downloaded, use.names = FALSE))))
+  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  valid <- candidates[vapply(candidates, valid_csv, logical(1))]
+  if (length(valid)) {
+    source <- valid[[1]]
+    if (identical(normalizePath(source, mustWork = FALSE),
+                  normalizePath(dest, mustWork = FALSE)) || file.rename(source, dest)) {
+      return(dest)
+    }
+  }
   message(sprintf("  AgERA5 time-series download failed (%d, area=%s): %s",
                   job$year, paste(job$area, collapse = ","),
                   if (is.null(err)) "no data file returned" else err))
@@ -275,7 +310,36 @@ AGERA5_CDS_REQUEST_CAP <- 4L
   out
 }
 
+.agera5_validate_wd <- function(wd) {
+  required <- c("DATE", "SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND")
+  if (!all(required %in% names(wd)) || !nrow(wd)) {
+    stop("AgERA5 output is missing required daily weather columns.", call. = FALSE)
+  }
+  dates <- as.Date(as.character(wd$DATE), format = "%Y%j")
+  if (any(is.na(dates)) || anyDuplicated(dates) ||
+      (length(dates) > 1L && any(diff(dates) != 1))) {
+    stop("AgERA5 output dates are invalid, duplicated, or incomplete.", call. = FALSE)
+  }
+  for (name in required[-1]) {
+    values <- as.numeric(wd[[name]])
+    if (any(!is.finite(values))) {
+      stop(sprintf("AgERA5 output variable %s contains missing/non-finite values.", name),
+           call. = FALSE)
+    }
+  }
+  in_range <- function(x, lower, upper) all(x >= lower & x <= upper)
+  if (!in_range(wd$TMAX, -90, 70) || !in_range(wd$TMIN, -90, 70) ||
+      !in_range(wd$TDEW, -100, 70) || any(wd$TMAX < wd$TMIN) ||
+      !in_range(wd$SRAD, 0, 60) || !in_range(wd$RAIN, 0, 2000) ||
+      !in_range(wd$RH2M, 0, 100) || !in_range(wd$WIND, 0, 100)) {
+    stop("AgERA5 output contains physically implausible values; cached data may not cover the requested area.",
+         call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
 .agera5_write_wth <- function(wd, pid, lat, lon, output_dir) {
+  .agera5_validate_wd(wd)
   temp_ok <- wd$TMAX > -90 & wd$TMIN > -90
   tavg <- ifelse(temp_ok, (wd$TMAX + wd$TMIN) / 2, NA_real_)
   tav <- mean(tavg, na.rm = TRUE)
@@ -328,7 +392,32 @@ AGERA5_CDS_REQUEST_CAP <- 4L
                                        chunk = chunk)
     }
   }
-  paths <- lapply(jobs, .agera5_download_timeseries_job)
+  requested_cores <- suppressWarnings(as.integer(n_cores))
+  if (is.na(requested_cores) || requested_cores < 1L) requested_cores <- 1L
+  workers <- min(requested_cores, AGERA5_CDS_REQUEST_CAP, max(1L, length(jobs)))
+  message(sprintf(
+    "  AgERA5 time-series cache/download phase: %d year-area job(s); using %d concurrent CDS request(s) (cap=%d).",
+    length(jobs), workers, AGERA5_CDS_REQUEST_CAP
+  ))
+  if (workers > 1L && length(jobs) > 1L) {
+    cl <- parallel::makeCluster(workers)
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+    parallel::clusterExport(
+      cl,
+      c(".agera5_download_timeseries_job", ".agera5_date_bounds_for_year",
+        ".agera5_timeseries_cache_path", ".agera5_slug_float",
+        ".agera5_timeseries_vars", ".agera5_ensure_ecmwfr_key",
+        ".agera5_cds_rc_candidates", ".agera5_read_cdsapirc",
+        ".dssatutils_cds_default_url", ".dssatutils_cds_rc_candidates",
+        ".dssatutils_read_cdsapirc", ".dssatutils_prompt_secret",
+        "setup_cds_credentials", ".dssatutils_ensure_cds_credentials"),
+      envir = parent.env(environment())
+    )
+    parallel::clusterEvalQ(cl, { library(ecmwfr); NULL })
+    paths <- parallel::parLapply(cl, jobs, .agera5_download_timeseries_job)
+  } else {
+    paths <- lapply(jobs, .agera5_download_timeseries_job)
+  }
   point_series <- setNames(lapply(ids, function(id)
     setNames(vector("list", length(.agera5_timeseries_vars)), names(.agera5_timeseries_vars))), ids)
 

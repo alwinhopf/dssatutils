@@ -62,7 +62,8 @@ _CDS_TIMESERIES_DATASET = "sis-agrometeorological-indicators-timeseries"
 _AGERA5_CDS_REQUEST_CAP = 4
 _AGERA5_TIMESERIES_MAX_EXTENT_DEG = 5.0
 _AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG = 4.5
-_AGERA5_TIMESERIES_PAD_DEG = 0.2
+_AGERA5_TIMESERIES_PAD_DEG = 0.0
+_AGERA5_GRID_DEG = 0.1
 _AGERA5_TIMESERIES_VARS = {
     "TMAX": ("2m_temperature_24_hour_maximum", "Temperature_Air_2m_Max_24h"),
     "TMIN": ("2m_temperature_24_hour_minimum", "Temperature_Air_2m_Min_24h"),
@@ -213,47 +214,64 @@ def _date_bounds_for_year(year: int):
 
 
 def _split_agera5_timeseries_chunks(lats, lons, chunk_degrees=None, pad=None):
-    """Return point-assignment chunks plus padded CDS request areas.
+    """Return globally anchored AgERA5-cell chunks and CDS request areas.
 
     The time-series CDS form allows a maximum area of 5 x 5 degrees. Points are
-    assigned to non-overlapping unpadded chunks, while each CDS request is padded
-    slightly so nearest-cell sampling remains covered.
+    snapped to the fixed 0.1-degree AgERA5 lattice. Cache keys therefore do not
+    shift when crop-model resolution or the supplied point subset changes.
     """
+    lats = np.asarray(lats, dtype=float)
+    lons = np.asarray(lons, dtype=float)
+    if (lats.size == 0 or lats.shape != lons.shape or
+            not np.isfinite(lats).all() or not np.isfinite(lons).all() or
+            (lats < -90).any() or (lats > 90).any() or
+            (lons < -180).any() or (lons > 180).any()):
+        raise ValueError("AgERA5 coordinates must be finite paired latitude/longitude values.")
     pad = _AGERA5_TIMESERIES_PAD_DEG if pad is None else float(pad)
     raw_chunk = (_AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG if chunk_degrees is None
                  else float(chunk_degrees))
-    max_raw = max(0.1, _AGERA5_TIMESERIES_MAX_EXTENT_DEG - 2 * pad)
-    step = min(max(0.1, raw_chunk), max_raw)
-    lat_min, lat_max = float(np.min(lats)), float(np.max(lats))
-    lon_min, lon_max = float(np.min(lons)), float(np.max(lons))
+    if not np.isfinite(raw_chunk) or raw_chunk <= 0:
+        raise ValueError("agera5_timeseries_chunk_degrees must be a positive number.")
+    if not np.isfinite(pad) or pad < 0:
+        raise ValueError("AgERA5 chunk padding must be non-negative.")
+    max_raw = max(_AGERA5_GRID_DEG, _AGERA5_TIMESERIES_MAX_EXTENT_DEG - 2 * pad)
+    cells_per_chunk = max(1, int(round(raw_chunk / _AGERA5_GRID_DEG)))
+    cells_per_chunk = min(
+        cells_per_chunk,
+        max(1, int(np.floor(max_raw / _AGERA5_GRID_DEG))),
+    )
+
+    grid_lats = np.clip(np.round(lats / _AGERA5_GRID_DEG) * _AGERA5_GRID_DEG, -90, 90)
+    grid_lons = np.clip(np.round(lons / _AGERA5_GRID_DEG) * _AGERA5_GRID_DEG, -180, 179.9)
+    lat_idx = np.rint((grid_lats + 90) / _AGERA5_GRID_DEG).astype(int)
+    lon_idx = np.rint((grid_lons + 180) / _AGERA5_GRID_DEG).astype(int)
+    lat_chunks = lat_idx // cells_per_chunk
+    lon_chunks = lon_idx // cells_per_chunk
+
     chunks = []
-    south = lat_min
-    while south <= lat_max + 1e-12:
-        north = min(lat_max, south + step)
-        west = lon_min
-        while west <= lon_max + 1e-12:
-            east = min(lon_max, west + step)
-            mask = ((lats >= south - 1e-12) & (lats <= north + 1e-12) &
-                    (lons >= west - 1e-12) & (lons <= east + 1e-12))
-            idx = np.where(mask)[0]
-            if len(idx):
-                area = [
-                    min(90.0, north + pad),
-                    max(-180.0, west - pad),
-                    max(-90.0, south - pad),
-                    min(179.9, east + pad),
-                ]
-                chunks.append({
-                    "idx": idx,
-                    "bounds": (south, west, north, east),
-                    "area": area,
-                })
-            if east >= lon_max:
-                break
-            west = east
-        if north >= lat_max:
-            break
-        south = north
+    for lat_chunk, lon_chunk in sorted(set(zip(lat_chunks.tolist(), lon_chunks.tolist()))):
+        idx = np.where((lat_chunks == lat_chunk) & (lon_chunks == lon_chunk))[0]
+        south_idx = lat_chunk * cells_per_chunk
+        west_idx = lon_chunk * cells_per_chunk
+        north_idx = min(1800, south_idx + cells_per_chunk - 1)
+        east_idx = min(3599, west_idx + cells_per_chunk - 1)
+        south = -90 + south_idx * _AGERA5_GRID_DEG
+        north = -90 + north_idx * _AGERA5_GRID_DEG
+        west = -180 + west_idx * _AGERA5_GRID_DEG
+        east = -180 + east_idx * _AGERA5_GRID_DEG
+        chunks.append({
+            "idx": idx,
+            "bounds": (south, west, north, east),
+            # CDS rejects a degenerate area. The snapped coordinates are grid
+            # cell centres, so add the half-cell envelope. A 0.1-degree chunk
+            # still represents exactly one canonical AgERA5 cell.
+            "area": [
+                min(90.0, north + _AGERA5_GRID_DEG / 2 + pad),
+                max(-180.0, west - _AGERA5_GRID_DEG / 2 - pad),
+                max(-90.0, south - _AGERA5_GRID_DEG / 2 - pad),
+                min(179.9, east + _AGERA5_GRID_DEG / 2 + pad),
+            ],
+        })
     return chunks
 
 
@@ -464,6 +482,32 @@ def _process_weather_agera5_timeseries(
 # .WTH writer (TESTABLE with synthetic data; no network)
 # ---------------------------------------------------------------------------
 
+def _validate_agera5_frame(df: pd.DataFrame) -> None:
+    required = ["DATE", "SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND"]
+    if df.empty or any(column not in df.columns for column in required):
+        raise ValueError("AgERA5 output is missing required daily weather columns.")
+    dates = pd.to_datetime(df["DATE"].astype(str), format="%Y%j", errors="coerce")
+    if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
+        raise ValueError("AgERA5 output dates are invalid, duplicated, or unordered.")
+    if len(dates) > 1 and not (dates.diff().dropna() == pd.Timedelta(days=1)).all():
+        raise ValueError("AgERA5 output dates are incomplete.")
+    numeric = df[required[1:]].apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(numeric.to_numpy()).all():
+        raise ValueError("AgERA5 output contains missing/non-finite weather values.")
+    ranges = {
+        "SRAD": (0, 60), "TMAX": (-90, 70), "TMIN": (-90, 70),
+        "RAIN": (0, 2000), "TDEW": (-100, 70), "RH2M": (0, 100),
+        "WIND": (0, 100),
+    }
+    if any(not numeric[column].between(lower, upper).all()
+           for column, (lower, upper) in ranges.items()):
+        raise ValueError(
+            "AgERA5 output contains physically implausible values; cached data "
+            "may not cover the requested area."
+        )
+    if (numeric["TMAX"] < numeric["TMIN"]).any():
+        raise ValueError("AgERA5 output contains TMAX below TMIN.")
+
 def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
                output_dir: str) -> str:
     """Write one DSSAT .WTH from a daily DataFrame.
@@ -471,6 +515,7 @@ def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
     *df* must contain DATE, SRAD, TMAX, TMIN, RAIN, TDEW, RH2M, WIND. Returns
     the output path. Shared formatting with the NASA POWER / Open-Meteo writers.
     """
+    _validate_agera5_frame(df)
     climatology = df.copy()
     climatology[["TMAX", "TMIN"]] = climatology[["TMAX", "TMIN"]].where(
         climatology[["TMAX", "TMIN"]] > -90

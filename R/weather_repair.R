@@ -82,7 +82,7 @@
     text = paste(data_lines, collapse = "\n"),
     col.names = c("DATE", .weather_repair_default_vars),
     colClasses = c("character", rep("numeric", length(.weather_repair_default_vars))),
-    na.strings = c("-99", "-99.0", "-99.00", "-99.000"),
+    na.strings = c("-99", "-99.0", "-99.00", "-99.000", "NA", "NaN", "Inf", "-Inf"),
     stringsAsFactors = FALSE
   )
   dat$..DATE_OBJ <- as.Date(vapply(dat$DATE, function(x) {
@@ -160,7 +160,7 @@ repair_weather_file_missing_values <- function(wth_file,
     text = paste(data_lines, collapse = "\n"),
     col.names = c("DATE", .weather_repair_default_vars),
     colClasses = c("character", rep("numeric", length(.weather_repair_default_vars))),
-    na.strings = c("-99", "-99.0", "-99.00", "-99.000"),
+    na.strings = c("-99", "-99.0", "-99.00", "-99.000", "NA", "NaN", "Inf", "-Inf"),
     stringsAsFactors = FALSE
   )
   variables <- intersect(toupper(as.character(variables)), .weather_repair_default_vars)

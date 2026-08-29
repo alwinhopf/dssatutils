@@ -246,6 +246,22 @@ test_that("AgERA5 time-series helpers match the Python API and unit conversions"
   expect_lte(chunks[[1]]$area[1] - chunks[[1]]$area[3], 5)
   expect_lte(chunks[[1]]$area[4] - chunks[[1]]$area[2], 5)
 
+  first <- dssatutils:::.agera5_split_timeseries_chunks(
+    33.6816, -102.5220, chunk_degrees = 0.1
+  )
+  same_cell <- dssatutils:::.agera5_split_timeseries_chunks(
+    33.7040, -102.4960, chunk_degrees = 0.1
+  )
+  adjacent <- dssatutils:::.agera5_split_timeseries_chunks(
+    33.7510, -102.4490, chunk_degrees = 0.1
+  )
+  expect_equal(unname(first[[1]]$area), c(33.75, -102.55, 33.65, -102.45),
+               tolerance = 1e-9)
+  expect_gt(first[[1]]$area[1], first[[1]]$area[3])
+  expect_gt(first[[1]]$area[4], first[[1]]$area[2])
+  expect_equal(same_cell[[1]]$area, first[[1]]$area, tolerance = 1e-9)
+  expect_false(isTRUE(all.equal(adjacent[[1]]$area, first[[1]]$area)))
+
   work <- tempfile(fileext = ".csv")
   on.exit(unlink(work), add = TRUE)
   readr::write_csv(data.frame(
@@ -290,6 +306,38 @@ test_that("AgERA5 time-series backend writes a complete weather file", {
   out <- file.path(work, "out", "P1.WTH")
   expect_true(file.exists(out))
   expect_equal(sum(grepl("^2010", readLines(out))), 365)
+})
+
+test_that("AgERA5 R time-series cache supports concurrent cache hits", {
+  work <- tempfile(); dir.create(work); on.exit(unlink(work, recursive = TRUE), add = TRUE)
+  cache <- file.path(work, "cache"); dir.create(cache)
+  points <- data.frame(ID = "P1", LAT = 33.6816, LONG = -102.5220)
+  chunk <- dssatutils:::.agera5_split_timeseries_chunks(
+    points$LAT, points$LONG, chunk_degrees = 0.1
+  )[[1]]
+  for (year in 2010:2011) {
+    dates <- seq(as.Date(sprintf("%d-01-01", year)),
+                 as.Date(sprintf("%d-12-31", year)), by = "day")
+    path <- dssatutils:::.agera5_timeseries_cache_path(cache, year, chunk$area, "csv")
+    readr::write_csv(data.frame(
+      valid_time = dates, latitude = 33.7, longitude = -102.5,
+      Temperature_Air_2m_Max_24h = 300,
+      Temperature_Air_2m_Min_24h = 280,
+      Solar_Radiation_Flux = 12000000,
+      Precipitation_Flux = 2,
+      Dew_Point_Temperature_2m_Mean_24h = 275,
+      Relative_Humidity_2m_15h = 60,
+      Wind_Speed_10m_Mean_24h = 3
+    ), path)
+  }
+  dssatutils:::.process_weather_agera5_timeseries(
+    points, 2010, 2011, file.path(work, "out"), "ID", "LAT", "LONG", 2,
+    file.path(work, "errors.log"), cache,
+    agera5_timeseries_chunk_degrees = 0.1
+  )
+  out <- file.path(work, "out", "P1.WTH")
+  expect_true(file.exists(out))
+  expect_equal(sum(grepl("^201[01]", readLines(out))), 730)
 })
 
 test_that("Alderman coordinate APIs accept lon and long aliases", {
