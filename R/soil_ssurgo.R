@@ -60,6 +60,22 @@ calculate_soil_properties <- function(soil_properties, top_depth, bottom_depth) 
   grouped
 }
 
+# # --- Saxton & Rawls (2006) SSKS (cm/h) ---------------------------------------
+.saxton_rawls_ssks <- function(theta_s, theta_33, theta_1500, coarse_fraction = 0, bulk_density = 1.4) {
+  theta_s <- pmax(theta_s, 0.02)
+  theta_33 <- pmax(theta_33, 0.01)
+  theta_1500 <- pmax(theta_1500, 0.005)
+  denom_lambda <- log(1500) - log(33)
+  lambda <- ifelse(theta_33 > theta_1500 & theta_33 > 0 & theta_1500 > 0,
+                   (log(theta_33) - log(theta_1500)) / denom_lambda,
+                   0.5)
+  Ks <- 1930 * (pmax(theta_s - theta_33, 1e-4))^(3 - lambda)
+  denom <- 1 - coarse_fraction * (1 - 3 * (bulk_density / 2.65) / 2)
+  denom <- ifelse(denom == 0, 1e-4, denom)
+  Kb <- Ks * (1 - coarse_fraction) / denom / 10
+  pmin(999.0, pmax(Kb, 0.001))
+}
+
 # --- DSSAT Formatting ---
 format_dssat_soil_single <- function(profile_data, output_dir) {
   soil_id <- as.character(profile_data$ID[1])
@@ -91,18 +107,20 @@ format_dssat_soil_single <- function(profile_data, output_dir) {
     dplyr::arrange(depth_num) %>%
     dplyr::group_walk(function(layer, key) {
       depth_val <- layer$depth_num
-      slll <- sprintf("%5.3f", layer$SLLL)
-      sdul <- sprintf("%5.3f", layer$SDUL)
-      ssat <- sprintf("%5.3f", layer$SSAT)
-      slll <- sub("^0", " ", slll)
-      sdul <- sub("^0", " ", sdul)
-      ssat <- sub("^0", " ", ssat)
+      slll <- sub("^0", " ", sprintf("%5.3f", layer$SLLL))
+      sdul <- sub("^0", " ", sprintf("%5.3f", layer$SDUL))
+      ssat <- sub("^0", " ", sprintf("%5.3f", layer$SSAT))
       
       depth_format <- sprintf("%6d", depth_val)
+      ssks_val <- if ("SSKS" %in% names(layer)) layer$SSKS else rep(NA_real_, nrow(layer))
+      ssks_str <- ifelse(!is.na(ssks_val) & ssks_val > 0,
+                         sprintf("%6.2f", pmin(999.0, ssks_val)),
+                         "   -99")
       
-      cat(sprintf("%s   -99 %s %s %s  1.00   -99 %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
-                  depth_format, slll, sdul, ssat,
-                  layer$bulk_density, layer$om_pct/1.724, layer$clay_pct, layer$silt_pct),
+      cat(paste0(sprintf("%s   -99 %s %s %s  1.00%s %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
+                         depth_format, slll, sdul, ssat, ssks_str,
+                         layer$bulk_density, layer$om_pct/1.724, layer$clay_pct, layer$silt_pct),
+                 collapse = ""),
           file = filename, append = TRUE)
     })
   cat("\n", file = filename, append = TRUE)
@@ -113,6 +131,16 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
                                  id_col, lat_col, long_col, format_sql_func) {
   
   message("Starting SSURGO Processing (Smart Resume Mode)...")
+
+  if (missing(format_sql_func) || is.null(format_sql_func) || !is.function(format_sql_func)) {
+    format_sql_func <- function(vec) {
+      vals <- unique(stats::na.omit(as.character(vec)))
+      if (length(vals) == 0) return("('')")
+      paste0("('", paste(gsub("'", "''", vals), collapse = "','"), "')")
+    }
+  }
+
+  dir.create(output_dir_individual, recursive = TRUE, showWarnings = FALSE)
 
   n_cores <- as.integer(n_cores)
   if (is.na(n_cores) || n_cores < 1) {
@@ -266,7 +294,8 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
       SDUL = pmax(SDUL_raw, SLLL + 0.04),
       theta_s33t = 0.278*sand_dec + 0.034*clay_dec + 0.022*om_dec - 0.018*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) - 0.584*(sand_dec*clay_dec) + 0.078,
       theta_s33 = theta_s33t + (0.636*theta_s33t - 0.107),
-      SSAT = SDUL + theta_s33 - 0.097*sand_dec + 0.043
+      SSAT = SDUL + theta_s33 - 0.097*sand_dec + 0.043,
+      SSKS = .saxton_rawls_ssks(SSAT, SDUL, SLLL, coarse_fraction = 0, bulk_density = bulk_density)
     )
 
     # WRITE .SOL FILE IMMEDIATELY
@@ -289,7 +318,7 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
     # explicit stopCluster() later. try() keeps it harmless on the normal path.
     on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
     parallel::clusterEvalQ(cl, { library(soilDB); library(sf); library(dplyr); library(tidyr) })
-    parallel::clusterExport(cl, varlist=c("process_point_wrapper", "robust_SDA_query", 
+    parallel::clusterExport(cl, varlist=c("process_point_wrapper", ".saxton_rawls_ssks", "robust_SDA_query", 
                                 "robust_SDA_spatialQuery", "calculate_soil_properties",
                                 "format_dssat_soil_single", "output_dir_individual", 
                                 "id_col", "lat_col", "long_col", "format_sql_func"), 

@@ -608,6 +608,52 @@ def test_gnatsgo_sol_writer():
         assert "     5   -99" in text and "    20   -99" in text
 
 
+def test_saxton_rawls_ssks_and_writers():
+    from dssatutils.soil_ssurgo import _saxton_rawls, _saxton_rawls_ssks, _write_sol as write_ssurgo_sol
+    from dssatutils.soil_gnatsgo import _write_sol as write_gnatsgo_sol
+    from dssatutils.soil_isdasoil import _write_sol as write_isdasoil_sol
+    from dssatutils.soil_lucas import _write_sol as write_lucas_sol
+
+    # Test Saxton & Rawls SSKS calculation
+    slll, sdul, ssat = _saxton_rawls(sand_pct=60.0, clay_pct=15.0, om_pct=1.5)
+    ssks = _saxton_rawls_ssks(ssat, sdul, slll, cf=0.0, bd=1.35)
+    assert 0.1 <= ssks <= 100.0, f"Unexpected SSKS value: {ssks}"
+
+    # Verify formatting in SSURGO, gNATSGO, iSDAsoil, LUCAS .SOL files
+    prof = pd.DataFrame({
+        "ID": ["P1"], "latitude": [30.0], "longitude": [-85.0],
+        "depth_top": [0], "depth_bottom": [20],
+        "clay_pct": [15.0], "sand_pct": [60.0], "silt_pct": [25.0],
+        "om_pct": [1.5], "bulk_density": [1.35],
+        "SLLL": [slll], "SDUL": [sdul], "SSAT": [ssat],
+        "SSKS": [ssks],
+    })
+
+    with tempfile.TemporaryDirectory() as work:
+        write_ssurgo_sol(prof, work)
+        txt = open(os.path.join(work, "P1.SOL")).read()
+        assert f"{ssks:6.2f}" in txt or f"{ssks:5.2f}" in txt
+        assert "  1.00   -99" not in txt, "SSKS should not be missing (-99)"
+
+    with tempfile.TemporaryDirectory() as work:
+        write_gnatsgo_sol(prof, work)
+        txt = open(os.path.join(work, "P1.SOL")).read()
+        assert f"{ssks:6.2f}" in txt or f"{ssks:5.2f}" in txt
+        assert "  1.00   -99" not in txt
+
+    with tempfile.TemporaryDirectory() as work:
+        write_isdasoil_sol(prof, work)
+        txt = open(os.path.join(work, "P1.SOL")).read()
+        assert f"{ssks:6.2f}" in txt or f"{ssks:5.2f}" in txt
+        assert "  1.00   -99" not in txt
+
+    with tempfile.TemporaryDirectory() as work:
+        write_lucas_sol(prof, work)
+        txt = open(os.path.join(work, "P1.SOL")).read()
+        assert f"{ssks:6.2f}" in txt or f"{ssks:5.2f}" in txt
+        assert "  1.00   -99" not in txt
+
+
 # --- Cross-language parity: the R twins carry the same API + algorithms ------
 
 def _read(rel):

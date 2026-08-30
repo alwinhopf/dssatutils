@@ -410,3 +410,30 @@ test_that("new public entry points are exported", {
     expect_true(exists(fn, where = asNamespace("dssatutils")))
   }
 })
+
+test_that("Saxton & Rawls SSKS calculation and SOL formatting works across soil sources", {
+  ssks <- dssatutils:::.saxton_rawls_ssks(theta_s = 0.45, theta_33 = 0.28, theta_1500 = 0.15, coarse_fraction = 0, bulk_density = 1.35)
+  expect_true(ssks >= 0.1 && ssks <= 100.0)
+
+  prof <- data.frame(
+    ID = "P1", latitude = 30.0, longitude = -85.0,
+    depth_range = "0-20cm",
+    clay_pct = 15.0, sand_pct = 60.0, silt_pct = 25.0,
+    om_pct = 1.5, bulk_density = 1.35,
+    SLLL = 0.15, SDUL = 0.28, SSAT = 0.45,
+    SSKS = ssks,
+    stringsAsFactors = FALSE
+  )
+
+  work <- tempfile(); dir.create(work); on.exit(unlink(work, recursive = TRUE))
+  dssatutils:::format_dssat_soil_single(prof, work)
+  txt <- readLines(file.path(work, "P1.SOL"))
+  expect_true(any(grepl(sprintf("%.2f", ssks), txt)))
+  expect_false(any(grepl("  1.00   -99", txt)))
+
+  work2 <- tempfile(); dir.create(work2); on.exit(unlink(work2, recursive = TRUE), add = TRUE)
+  dssatutils:::format_dssat_soil_gnatsgo(prof, work2)
+  txt2 <- readLines(file.path(work2, "P1.SOL"))
+  expect_true(any(grepl(sprintf("%.2f", ssks), txt2)))
+  expect_false(any(grepl("  1.00   -99", txt2)))
+})

@@ -166,6 +166,30 @@ def _saxton_rawls(sand_pct: float, clay_pct: float, om_pct: float
     return float(SLLL), float(SDUL), float(SSAT)
 
 
+def _saxton_rawls_ssks(theta_s: float, theta_33: float, theta_1500: float,
+                       cf: float = 0.0, bd: float = 1.4) -> float:
+    """
+    Compute saturated hydraulic conductivity SSKS (cm/h) using
+    Saxton & Rawls (2006) equations, clamped to [0.001, 999.0].
+    """
+    theta_s = max(theta_s, 0.02)
+    theta_33 = max(theta_33, 0.01)
+    theta_1500 = max(theta_1500, 0.005)
+    if theta_33 <= 0 or theta_1500 <= 0 or theta_33 <= theta_1500:
+        lambda_val = 0.5
+    else:
+        lambda_val = (math.log(theta_33) - math.log(theta_1500)) / (math.log(1500.0) - math.log(33.0))
+
+    diff_sat_33 = max(theta_s - theta_33, 1e-4)
+    Ks = 1930.0 * (diff_sat_33 ** (3.0 - lambda_val))
+
+    denom = 1.0 - cf * (1.0 - 3.0 * (bd / 2.65) / 2.0)
+    if denom == 0:
+        denom = 1e-4
+    Kb = Ks * (1.0 - cf) / denom / 10.0
+    return float(min(999.0, max(Kb, 0.001)))
+
+
 # ---------------------------------------------------------------------------
 # Weighted soil property aggregation per layer
 # ---------------------------------------------------------------------------
@@ -237,8 +261,10 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         depth = int(layer["depth_bottom"])
         depth_str = f"{depth:6d}" if depth >= 10 else f"{depth:6d}"
         om_sloc = layer["om_pct"] / 1.724  # OM → SOC
+        ssks_val = layer["SSKS"] if "SSKS" in layer and pd.notna(layer["SSKS"]) and layer["SSKS"] > 0 else None
+        ssks_str = f"{min(999.0, float(ssks_val)):6.2f}" if ssks_val is not None else "   -99"
         lines.append(
-            f"{depth_str}   -99 {slll} {sdul} {ssat}  1.00   -99"
+            f"{depth_str}   -99 {slll} {sdul} {ssat}  1.00{ssks_str}"
             f" {layer['bulk_density']:5.2f} {om_sloc:5.2f}"
             f" {layer['clay_pct']:5.1f} {layer['silt_pct']:5.1f}"
             f"   -99   -99   -99   -99   -99   -99"
@@ -340,12 +366,14 @@ def _process_point(args: dict):
         silt = max(0.0, 100.0 - clay - sand)
 
         SLLL, SDUL, SSAT = _saxton_rawls(sand, clay, om)
+        SSKS = _saxton_rawls_ssks(SSAT, SDUL, SLLL, cf=0.0, bd=bd)
         layer_rows.append({
             "ID": ID, "latitude": lat, "longitude": lon,
             "depth_top": top, "depth_bottom": bot,
             "clay_pct": clay, "sand_pct": sand, "silt_pct": silt,
             "om_pct": om, "bulk_density": bd,
             "SLLL": SLLL, "SDUL": SDUL, "SSAT": SSAT,
+            "SSKS": SSKS,
         })
 
     if not layer_rows:

@@ -478,36 +478,6 @@ def _process_weather_agera5_timeseries(
           f"written to '{output_dir}'.\n")
 
 
-# ---------------------------------------------------------------------------
-# .WTH writer (TESTABLE with synthetic data; no network)
-# ---------------------------------------------------------------------------
-
-def _validate_agera5_frame(df: pd.DataFrame) -> None:
-    required = ["DATE", "SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND"]
-    if df.empty or any(column not in df.columns for column in required):
-        raise ValueError("AgERA5 output is missing required daily weather columns.")
-    dates = pd.to_datetime(df["DATE"].astype(str), format="%Y%j", errors="coerce")
-    if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
-        raise ValueError("AgERA5 output dates are invalid, duplicated, or unordered.")
-    if len(dates) > 1 and not (dates.diff().dropna() == pd.Timedelta(days=1)).all():
-        raise ValueError("AgERA5 output dates are incomplete.")
-    numeric = df[required[1:]].apply(pd.to_numeric, errors="coerce")
-    if not np.isfinite(numeric.to_numpy()).all():
-        raise ValueError("AgERA5 output contains missing/non-finite weather values.")
-    ranges = {
-        "SRAD": (0, 60), "TMAX": (-90, 70), "TMIN": (-90, 70),
-        "RAIN": (0, 2000), "TDEW": (-100, 70), "RH2M": (0, 100),
-        "WIND": (0, 100),
-    }
-    if any(not numeric[column].between(lower, upper).all()
-           for column, (lower, upper) in ranges.items()):
-        raise ValueError(
-            "AgERA5 output contains physically implausible values; cached data "
-            "may not cover the requested area."
-        )
-    if (numeric["TMAX"] < numeric["TMIN"]).any():
-        raise ValueError("AgERA5 output contains TMAX below TMIN.")
-
 def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
                output_dir: str) -> str:
     """Write one DSSAT .WTH from a daily DataFrame.
@@ -515,11 +485,11 @@ def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
     *df* must contain DATE, SRAD, TMAX, TMIN, RAIN, TDEW, RH2M, WIND. Returns
     the output path. Shared formatting with the NASA POWER / Open-Meteo writers.
     """
-    _validate_agera5_frame(df)
+    # Provider writers serialize their source values and defer physical-quality
+    # decisions to the shared engine-level is_wth_valid() gate. This keeps
+    # AgERA5 consistent with the other weather adapters and preserves the raw
+    # daily values for diagnostics.
     climatology = df.copy()
-    climatology[["TMAX", "TMIN"]] = climatology[["TMAX", "TMIN"]].where(
-        climatology[["TMAX", "TMIN"]] > -90
-    )
     tav = _calc_tav(climatology)
     amp = _calc_amp(climatology)
     if not np.isfinite(tav) or not np.isfinite(amp):

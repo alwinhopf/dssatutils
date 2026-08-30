@@ -29,7 +29,7 @@ LUCAS_ROOTING_MAX_CM <- 150
   ph   = c("pH_H2O", "pH_in_H2O", "pH_CaCl2", "pH", "ph")
 )
 
-.lucas_saxton_rawls <- function(sand_pct, clay_pct, om_pct) {
+.lucas_saxton_rawls <- function(sand_pct, clay_pct, om_pct, bd = 1.4) {
   S <- sand_pct / 100; C <- clay_pct / 100; OM <- om_pct / 100
   t1500 <- -0.024*S + 0.487*C + 0.006*OM + 0.005*(S*OM) - 0.013*(C*OM) + 0.068*(S*C) + 0.031
   # Floor wilting point at 0.02 (see soil_ssurgo.R): Saxton-Rawls can yield
@@ -41,7 +41,8 @@ LUCAS_ROOTING_MAX_CM <- 150
   ts33t <- 0.278*S + 0.034*C + 0.022*OM - 0.018*(S*OM) - 0.027*(C*OM) - 0.584*(S*C) + 0.078
   ts33  <- ts33t + (0.636*ts33t - 0.107)
   SSAT  <- SDUL + ts33 - 0.097*S + 0.043
-  c(SLLL = SLLL, SDUL = SDUL, SSAT = SSAT)
+  SSKS  <- .saxton_rawls_ssks(SSAT, SDUL, SLLL, coarse_fraction = 0, bulk_density = bd)
+  c(SLLL = SLLL, SDUL = SDUL, SSAT = SSAT, SSKS = SSKS)
 }
 
 .lucas_resolve <- function(df, key, col_map) {
@@ -80,6 +81,7 @@ format_dssat_soil_lucas <- function(profile_data, output_dir) {
   soil_id <- as.character(profile_data$ID[1])
   filename <- file.path(output_dir, paste0(soil_id, ".SOL"))
   if (file.exists(filename)) return()
+
   cat("*SOILS: Europe LUCAS Topsoil Profiles\n", file = filename)
   cat("! Generated from LUCAS topsoil (0-20 cm MEASURED; subsoil EXTRAPOLATED), Saxton & Rawls\n\n",
       file = filename, append = TRUE)
@@ -100,8 +102,13 @@ format_dssat_soil_lucas <- function(profile_data, output_dir) {
     slll <- sub("^0", " ", sprintf("%5.3f", layer$SLLL))
     sdul <- sub("^0", " ", sprintf("%5.3f", layer$SDUL))
     ssat <- sub("^0", " ", sprintf("%5.3f", layer$SSAT))
-    cat(sprintf("%6d   -99 %s %s %s  1.00   -99 %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
-                as.integer(layer$depth_bottom), slll, sdul, ssat,
+    ssks_str <- if ("SSKS" %in% names(layer) && !is.na(layer$SSKS) && layer$SSKS > 0) {
+      sprintf("%6.2f", min(999.0, layer$SSKS))
+    } else {
+      "   -99"
+    }
+    cat(sprintf("%6d   -99 %s %s %s  1.00%s %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
+                as.integer(layer$depth_bottom), slll, sdul, ssat, ssks_str,
                 layer$bulk_density, layer$om_pct / 1.724, layer$clay_pct, layer$silt_pct),
         file = filename, append = TRUE)
   }
@@ -147,12 +154,15 @@ process_soils_lucas <- function(grid_points, output_dir_csv, output_dir_individu
     clay <- rec$clay; sand <- rec$sand
     silt <- if (is.finite(rec$silt)) rec$silt else max(0, 100 - clay - sand)
     om <- if (is.finite(rec$oc)) rec$oc / 10 * 1.724 else 1
-    sr <- .lucas_saxton_rawls(sand, clay, om)
-    bd <- max(0.9, min(1.8, (1 - sr[["SSAT"]]) * 2.65))
+    sr_init <- .lucas_saxton_rawls(sand, clay, om)
+    bd <- max(0.9, min(1.8, (1 - sr_init[["SSAT"]]) * 2.65))
+    sr <- .lucas_saxton_rawls(sand, clay, om, bd = bd)
     rows <- lapply(list(c(0, 20), c(20, LUCAS_ROOTING_MAX_CM)), function(d) {
       data.frame(ID = ID, latitude = lat, longitude = lon, depth_top = d[1], depth_bottom = d[2],
                  clay_pct = clay, sand_pct = sand, silt_pct = silt, om_pct = om, bulk_density = bd,
-                 SLLL = sr[["SLLL"]], SDUL = sr[["SDUL"]], SSAT = sr[["SSAT"]], stringsAsFactors = FALSE)
+                 SLLL = sr[["SLLL"]], SDUL = sr[["SDUL"]], SSAT = sr[["SSAT"]],
+                 SSKS = sr[["SSKS"]],
+                 stringsAsFactors = FALSE)
     })
     profile_df <- do.call(rbind, rows)
     format_dssat_soil_lucas(profile_df, output_dir_individual)

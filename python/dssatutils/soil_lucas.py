@@ -27,7 +27,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from .soil_ssurgo import _failure, _saxton_rawls
+from .soil_ssurgo import _failure, _saxton_rawls, _saxton_rawls_ssks
 
 _LUCAS_ROOTING_MAX_CM = 150
 
@@ -107,8 +107,10 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         slll, sdul, ssat = _f3(layer["SLLL"]), _f3(layer["SDUL"]), _f3(layer["SSAT"])
         depth = int(layer["depth_bottom"])
         om_sloc = layer["om_pct"] / 1.724
+        ssks_val = layer["SSKS"] if "SSKS" in layer and pd.notna(layer["SSKS"]) and layer["SSKS"] > 0 else None
+        ssks_str = f"{min(999.0, float(ssks_val)):6.2f}" if ssks_val is not None else "   -99"
         lines.append(
-            f"{depth:6d}   -99 {slll} {sdul} {ssat}  1.00   -99"
+            f"{depth:6d}   -99 {slll} {sdul} {ssat}  1.00{ssks_str}"
             f" {layer['bulk_density']:5.2f} {om_sloc:5.2f}"
             f" {layer['clay_pct']:5.1f} {layer['silt_pct']:5.1f}"
             f"   -99   -99   -99   -99   -99   -99"
@@ -181,6 +183,7 @@ def process_soils_lucas(
         om = float(rec["oc"]) / 10.0 * 1.724 if np.isfinite(rec["oc"]) else 1.0  # OC g/kg -> OC% -> OM%
         SLLL, SDUL, SSAT = _saxton_rawls(sand, clay, om)
         bd = max(0.9, min(1.8, (1.0 - SSAT) * 2.65))   # estimate BD from porosity (no measured BD in LUCAS)
+        SSKS = _saxton_rawls_ssks(SSAT, SDUL, SLLL, cf=0.0, bd=bd)
         rows = []
         for top, bottom in [(0, 20), (20, _LUCAS_ROOTING_MAX_CM)]:
             rows.append({
@@ -189,6 +192,7 @@ def process_soils_lucas(
                 "clay_pct": clay, "sand_pct": sand, "silt_pct": silt,
                 "om_pct": om, "bulk_density": bd,
                 "SLLL": SLLL, "SDUL": SDUL, "SSAT": SSAT,
+                "SSKS": SSKS,
             })
         profile_df = pd.DataFrame(rows)
         _write_sol(profile_df, output_dir_individual)

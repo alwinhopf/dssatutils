@@ -93,9 +93,14 @@ format_dssat_soil_gnatsgo <- function(profile_data, output_dir) {
       sdul <- sub("^0", " ", sprintf("%5.3f", layer$SDUL))
       ssat <- sub("^0", " ", sprintf("%5.3f", layer$SSAT))
       depth_format <- sprintf("%6d", depth_val)
-      cat(sprintf("%s   -99 %s %s %s  1.00   -99 %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
-                  depth_format, slll, sdul, ssat,
-                  layer$bulk_density, layer$om_pct / 1.724, layer$clay_pct, layer$silt_pct),
+      ssks_val <- if ("SSKS" %in% names(layer)) layer$SSKS else rep(NA_real_, nrow(layer))
+      ssks_str <- ifelse(!is.na(ssks_val) & ssks_val > 0,
+                         sprintf("%6.2f", pmin(999.0, ssks_val)),
+                         "   -99")
+      cat(paste0(sprintf("%s   -99 %s %s %s  1.00%s %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
+                         depth_format, slll, sdul, ssat, ssks_str,
+                         layer$bulk_density, layer$om_pct / 1.724, layer$clay_pct, layer$silt_pct),
+                 collapse = ""),
           file = filename, append = TRUE)
     })
   cat("\n", file = filename, append = TRUE)
@@ -105,10 +110,18 @@ format_dssat_soil_gnatsgo <- function(profile_data, output_dir) {
 # --- Main processing function -------------------------------------------------
 # Signature mirrors process_soils_ssurgo exactly.
 process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_individual, n_cores,
-                                  id_col, lat_col, long_col, format_sql_func) {
+                                  id_col, lat_col, long_col, format_sql_func = NULL) {
 
   message("Starting gNATSGO Processing (Smart Resume Mode)...")
   dir.create(output_dir_individual, recursive = TRUE, showWarnings = FALSE)
+
+  if (missing(format_sql_func) || is.null(format_sql_func) || !is.function(format_sql_func)) {
+    format_sql_func <- function(vec) {
+      vals <- unique(stats::na.omit(as.character(vec)))
+      if (length(vals) == 0) return("('')")
+      paste0("('", paste(gsub("'", "''", vals), collapse = "','"), "')")
+    }
+  }
 
   grid_df <- grid_points %>% sf::st_drop_geometry() %>% as.data.frame()
   if (!lat_col %in% names(grid_df))  grid_df[[lat_col]]  <- sf::st_coordinates(grid_points)[, 2]
@@ -224,7 +237,8 @@ process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_indivi
       SDUL = pmax(SDUL_raw, SLLL + 0.04),
       theta_s33t = 0.278*sand_dec + 0.034*clay_dec + 0.022*om_dec - 0.018*(sand_dec*om_dec) - 0.027*(clay_dec*om_dec) - 0.584*(sand_dec*clay_dec) + 0.078,
       theta_s33 = theta_s33t + (0.636*theta_s33t - 0.107),
-      SSAT = SDUL + theta_s33 - 0.097*sand_dec + 0.043
+      SSAT = SDUL + theta_s33 - 0.097*sand_dec + 0.043,
+      SSKS = .saxton_rawls_ssks(SSAT, SDUL, SLLL, coarse_fraction = 0, bulk_density = bulk_density)
     )
     format_dssat_soil_gnatsgo(results_df, output_dir_individual)
     results_df
@@ -242,6 +256,7 @@ process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_indivi
     on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
     parallel::clusterEvalQ(cl, { library(soilDB); library(sf); library(terra); library(dplyr) })
     parallel::clusterExport(cl, varlist = c("process_point_wrapper", "gnatsgo_mukey_at_point",
+                                            ".saxton_rawls_ssks",
                                             "robust_SDA_query", "calculate_soil_properties",
                                             "format_dssat_soil_gnatsgo", "output_dir_individual",
                                             "id_col", "lat_col", "long_col", "format_sql_func"),

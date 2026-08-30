@@ -146,10 +146,11 @@ deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
   consecutive dates, and rejects physically impossible forcing while retaining
   the standard `-99` missing-value sentinel. Callers can pass
   `required_columns` to reject `-99` in model-essential fields while still
-  permitting optional missing humidity/wind inputs. AgERA5 applies the same
-  physical checks before writing. Its recommended time-series cache uses globally
-  anchored 0.1-degree cells or fixed tiles; the legacy gridded cache remains
-  keyed by the exact requested geographic area.
+  permitting optional missing humidity/wind inputs. Like the other adapters,
+  AgERA5 writes the provider values without a separate physical-quality gate;
+  consumer engines apply `is_wth_valid()` uniformly afterward. Its recommended
+  time-series cache uses globally anchored 0.1-degree cells or fixed tiles; the
+  legacy gridded cache remains keyed by the exact requested geographic area.
 - **GridMET** RH2M and TDEW are *estimated* (`TDEW ≈ TMIN − 2.5`, RH from the
   diurnal temperature range), not measured.
 - **Open-Meteo** uses the API's `dew_point_2m_mean` and

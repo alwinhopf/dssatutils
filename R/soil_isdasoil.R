@@ -81,8 +81,13 @@ format_dssat_soil_isdasoil <- function(profile_data, output_dir) {
     slll <- sub("^0", " ", sprintf("%5.3f", layer$SLLL))
     sdul <- sub("^0", " ", sprintf("%5.3f", layer$SDUL))
     ssat <- sub("^0", " ", sprintf("%5.3f", layer$SSAT))
-    cat(sprintf("%6d   -99 %s %s %s  1.00   -99 %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
-                as.integer(layer$depth_bottom), slll, sdul, ssat,
+    ssks_str <- if ("SSKS" %in% names(layer) && !is.na(layer$SSKS) && layer$SSKS > 0) {
+      sprintf("%6.2f", min(999.0, layer$SSKS))
+    } else {
+      "   -99"
+    }
+    cat(sprintf("%6d   -99 %s %s %s  1.00%s %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
+                as.integer(layer$depth_bottom), slll, sdul, ssat, ssks_str,
                 layer$bulk_density, layer$om_pct / 1.724, layer$clay_pct, layer$silt_pct),
         file = filename, append = TRUE)
   }
@@ -91,7 +96,7 @@ format_dssat_soil_isdasoil <- function(profile_data, output_dir) {
 
 
 # --- Saxton & Rawls (2006) — identical to soil_ssurgo.R's inline formulas ------
-.isda_saxton_rawls <- function(sand_pct, clay_pct, om_pct) {
+.isda_saxton_rawls <- function(sand_pct, clay_pct, om_pct, bd = 1.4) {
   S <- sand_pct / 100; C <- clay_pct / 100; OM <- om_pct / 100
   t1500 <- -0.024*S + 0.487*C + 0.006*OM + 0.005*(S*OM) - 0.013*(C*OM) + 0.068*(S*C) + 0.031
   # Floor wilting point at 0.02 (see soil_ssurgo.R): Saxton-Rawls can yield
@@ -103,7 +108,8 @@ format_dssat_soil_isdasoil <- function(profile_data, output_dir) {
   ts33t <- 0.278*S + 0.034*C + 0.022*OM - 0.018*(S*OM) - 0.027*(C*OM) - 0.584*(S*C) + 0.078
   ts33  <- ts33t + (0.636*ts33t - 0.107)
   SSAT  <- SDUL + ts33 - 0.097*S + 0.043
-  c(SLLL = SLLL, SDUL = SDUL, SSAT = SSAT)
+  SSKS  <- .saxton_rawls_ssks(SSAT, SDUL, SLLL, coarse_fraction = 0, bulk_density = bd)
+  c(SLLL = SLLL, SDUL = SDUL, SSAT = SSAT, SSKS = SSKS)
 }
 
 
@@ -163,12 +169,13 @@ process_soils_isdasoil <- function(grid_points, output_dir_csv, output_dir_indiv
       om <- if (is.finite(oc)) oc / 10 * 1.724 else 1     # g/kg -> OC% -> OM%
       bd <- if (is.finite(bd)) bd else 1.4
       silt <- max(0, 100 - clay - sand)
-      sr <- .isda_saxton_rawls(sand, clay, om)
+      sr <- .isda_saxton_rawls(sand, clay, om, bd = bd)
       data.frame(ID = ID, latitude = lats[i], longitude = lons[i],
                  depth_top = top, depth_bottom = bottom,
                  clay_pct = clay, sand_pct = sand, silt_pct = silt,
                  om_pct = om, bulk_density = bd,
                  SLLL = sr[["SLLL"]], SDUL = sr[["SDUL"]], SSAT = sr[["SSAT"]],
+                 SSKS = sr[["SSKS"]],
                  stringsAsFactors = FALSE)
     })
     profile_df <- do.call(rbind, rows)

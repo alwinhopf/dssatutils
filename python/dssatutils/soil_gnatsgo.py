@@ -42,6 +42,7 @@ from .soil_ssurgo import (
     _format_in,
     _mapunit_names,
     _saxton_rawls,
+    _saxton_rawls_ssks,
     _sda_query,
     _sda_query_result,
 )
@@ -152,8 +153,10 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         slll, sdul, ssat = _f3(layer["SLLL"]), _f3(layer["SDUL"]), _f3(layer["SSAT"])
         depth = int(layer["depth_bottom"])
         om_sloc = layer["om_pct"] / 1.724  # OM → SOC
+        ssks_val = layer["SSKS"] if "SSKS" in layer and pd.notna(layer["SSKS"]) and layer["SSKS"] > 0 else None
+        ssks_str = f"{min(999.0, float(ssks_val)):6.2f}" if ssks_val is not None else "   -99"
         lines.append(
-            f"{depth:6d}   -99 {slll} {sdul} {ssat}  1.00   -99"
+            f"{depth:6d}   -99 {slll} {sdul} {ssat}  1.00{ssks_str}"
             f" {layer['bulk_density']:5.2f} {om_sloc:5.2f}"
             f" {layer['clay_pct']:5.1f} {layer['silt_pct']:5.1f}"
             f"   -99   -99   -99   -99   -99   -99"
@@ -239,12 +242,14 @@ def _process_point(args: dict):
         bd = float(agg["bulk_density"]) if not np.isnan(agg["bulk_density"]) else 1.4
         silt = max(0.0, 100.0 - clay - sand)
         SLLL, SDUL, SSAT = _saxton_rawls(sand, clay, om)
+        SSKS = _saxton_rawls_ssks(SSAT, SDUL, SLLL, cf=0.0, bd=bd)
         layer_rows.append({
             "ID": ID, "latitude": lat, "longitude": lon,
             "depth_top": top, "depth_bottom": bot,
             "clay_pct": clay, "sand_pct": sand, "silt_pct": silt,
             "om_pct": om, "bulk_density": bd,
             "SLLL": SLLL, "SDUL": SDUL, "SSAT": SSAT,
+            "SSKS": SSKS,
         })
 
     if not layer_rows:

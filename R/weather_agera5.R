@@ -310,38 +310,12 @@ AGERA5_CDS_REQUEST_CAP <- 4L
   out
 }
 
-.agera5_validate_wd <- function(wd) {
-  required <- c("DATE", "SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND")
-  if (!all(required %in% names(wd)) || !nrow(wd)) {
-    stop("AgERA5 output is missing required daily weather columns.", call. = FALSE)
-  }
-  dates <- as.Date(as.character(wd$DATE), format = "%Y%j")
-  if (any(is.na(dates)) || anyDuplicated(dates) ||
-      (length(dates) > 1L && any(diff(dates) != 1))) {
-    stop("AgERA5 output dates are invalid, duplicated, or incomplete.", call. = FALSE)
-  }
-  for (name in required[-1]) {
-    values <- as.numeric(wd[[name]])
-    if (any(!is.finite(values))) {
-      stop(sprintf("AgERA5 output variable %s contains missing/non-finite values.", name),
-           call. = FALSE)
-    }
-  }
-  in_range <- function(x, lower, upper) all(x >= lower & x <= upper)
-  if (!in_range(wd$TMAX, -90, 70) || !in_range(wd$TMIN, -90, 70) ||
-      !in_range(wd$TDEW, -100, 70) || any(wd$TMAX < wd$TMIN) ||
-      !in_range(wd$SRAD, 0, 60) || !in_range(wd$RAIN, 0, 2000) ||
-      !in_range(wd$RH2M, 0, 100) || !in_range(wd$WIND, 0, 100)) {
-    stop("AgERA5 output contains physically implausible values; cached data may not cover the requested area.",
-         call. = FALSE)
-  }
-  invisible(TRUE)
-}
-
 .agera5_write_wth <- function(wd, pid, lat, lon, output_dir) {
-  .agera5_validate_wd(wd)
-  temp_ok <- wd$TMAX > -90 & wd$TMIN > -90
-  tavg <- ifelse(temp_ok, (wd$TMAX + wd$TMIN) / 2, NA_real_)
+  # Provider writers serialize their source values and defer physical-quality
+  # decisions to the shared engine-level is_wth_valid() gate. This keeps
+  # AgERA5 consistent with the other weather adapters and preserves the raw
+  # daily values for diagnostics.
+  tavg <- (wd$TMAX + wd$TMIN) / 2
   tav <- mean(tavg, na.rm = TRUE)
   monthly <- stats::aggregate(tavg, list(YEAR = wd$YEAR, MM = wd$MM), mean, na.rm = TRUE)
   amp_by_year <- stats::aggregate(monthly$x, list(YEAR = monthly$YEAR),

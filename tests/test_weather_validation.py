@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from dssatutils import is_wth_valid
 from dssatutils.weather_agera5 import _write_wth
@@ -58,15 +57,35 @@ def test_weather_validator_can_require_complete_core_forcing(tmp_path):
     )
 
 
-def test_agera5_writer_rejects_nodata_converted_to_absolute_zero(tmp_path):
+def test_weather_validator_can_require_all_agera5_forcing(tmp_path):
+    path = tmp_path / "TEST.WTH"
+    _write_sample(path, [
+        "2024001 12.0 10.0 1.0 0.0 -99 -99 -99",
+        "2024002 12.0 10.0 1.0 0.0 -99 -99 -99",
+    ])
+    core = ("SRAD", "TMAX", "TMIN", "RAIN")
+    agera5 = core + ("TDEW", "RH2M", "WIND")
+
+    assert is_wth_valid(path, end_year=2024, required_columns=core)
+    assert not is_wth_valid(path, end_year=2024, required_columns=agera5)
+
+
+def test_agera5_writer_defers_physical_validation_to_shared_validator(tmp_path):
     frame = pd.DataFrame({
         "DATE": ["2018001", "2018002"], "YEAR": [2018, 2018], "MM": [1, 1],
-        "SRAD": [0.0, 0.0], "TMAX": [-273.15, -273.15],
-        "TMIN": [-273.15, -273.15], "RAIN": [0.0, 0.0],
-        "TDEW": [-273.15, -273.15], "RH2M": [0.0, 0.0], "WIND": [0.0, 0.0],
+        "SRAD": [12.0, 12.0], "TMAX": [5.8, 10.0],
+        "TMIN": [6.0, 2.0], "RAIN": [0.0, 0.0],
+        "TDEW": [0.0, 0.0], "RH2M": [60.0, 60.0], "WIND": [3.0, 3.0],
     })
-    with pytest.raises(ValueError, match="physically implausible"):
-        _write_wth(frame, "TEST", 33.7, -102.5, str(tmp_path))
+    path = Path(_write_wth(frame, "TEST", 33.7, -102.5, str(tmp_path)))
+
+    assert path.exists()
+    assert "   5.8   6.0" in path.read_text(encoding="utf-8")
+    assert not is_wth_valid(
+        path,
+        end_year=2018,
+        required_columns=("SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND"),
+    )
 
 
 def test_nasa_power_normalizes_json_null_to_numeric_missing(monkeypatch):
