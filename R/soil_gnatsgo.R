@@ -72,12 +72,13 @@ format_dssat_soil_gnatsgo <- function(profile_data, output_dir) {
   cat("*SOILS: USA gNATSGO Soil Profiles\n", file = filename)
   cat("! Generated from gNATSGO (SoilWeb WCS mukey grid + USDA SDA tabular)\n\n",
       file = filename, append = TRUE)
-  cat(sprintf("*%-6s  gNATSGO       %9.3f %9.3f\n",
-              soil_id, profile_data$latitude[1], profile_data$longitude[1]),
+  profile_depth <- max(as.numeric(sub(".*-", "", sub("cm", "", profile_data$depth_range))))
+  cat(sprintf("*%-10s  %-11s %-5s %5.0f %s\n",
+              soil_id, "gNATSGO", "-99", profile_depth, "gNATSGO profile"),
       file = filename, append = TRUE)
   cat("@SITE        COUNTRY          LAT     LONG SCS FAMILY\n", file = filename, append = TRUE)
-  cat(sprintf(" %-11s USA         %9.3f %9.3f \n",
-              soil_id, profile_data$latitude[1], profile_data$longitude[1]),
+  cat(sprintf(" %-11s %-11s %8.3f %8.3f \n",
+              soil_id, "USA", profile_data$latitude[1], profile_data$longitude[1]),
       file = filename, append = TRUE)
   cat("@ SCOM  SALB  SLU1  SLDR  SLRO  SLNF  SLPF  SMHB  SMPX  SMKE\n", file = filename, append = TRUE)
   cat("    BN   .13     6    .6    73     1     1 IB001 IB001 IB001\n", file = filename, append = TRUE)
@@ -95,7 +96,8 @@ format_dssat_soil_gnatsgo <- function(profile_data, output_dir) {
       depth_format <- sprintf("%6d", depth_val)
       ssks_val <- if ("SSKS" %in% names(layer)) layer$SSKS else rep(NA_real_, nrow(layer))
       ssks_str <- ifelse(!is.na(ssks_val) & ssks_val > 0,
-                         sprintf("%6.2f", pmin(999.0, ssks_val)),
+                         ifelse(ssks_val >= 100, sprintf("%6.1f", pmin(999.0, ssks_val)),
+                                sprintf("%6.2f", ssks_val)),
                          "   -99")
       cat(paste0(sprintf("%s   -99 %s %s %s  1.00%s %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
                          depth_format, slll, sdul, ssat, ssks_str,

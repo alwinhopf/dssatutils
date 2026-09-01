@@ -45,6 +45,8 @@ _EXPORTS = {
     "process_weather_pgf": "weather_pgf",
     "process_weather_merra2": "weather_merra2",
     "is_wth_valid": "weather_validation",
+    "soil_file_issue": "soil_validation",
+    "rebuild_soil_files_from_mapping": "soil_validation",
     "setup_cds_credentials": "credentials",
     "era5land_set_cds_key": "credentials",
     "repair_weather_missing_values": "weather_repair",

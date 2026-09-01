@@ -133,6 +133,68 @@ deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
 
 ## Known limitations / notes
 
+### Input-cache integrity fixes (2026-08-31)
+
+- R GRIDMET extraction now retains an NA row for each out-of-coverage point.
+  Previously `terra` dropped those cells and subsequent weather rows were
+  assigned to the wrong point IDs. Python already retained invalid rows; its
+  extraction helper now shares the same regression cases (invalid points at
+  either end/in the middle, duplicate cells, out-of-order cells, single layers).
+  Native NetCDF caches are reusable. Existing affected `.WTH` files are NOT
+  repaired by installing this change: re-extract into a new weather directory,
+  using the same native cache, then rebuild dependent model runs/results.
+- SSURGO/gNATSGO's older R vector writer inserted an extra space before each
+  layer after the first. Although the row writer was corrected on August 30,
+  existing caches remained reusable under whitespace-only preflight checks.
+  In DSSAT's fixed columns an intended 200 cm depth could become 20 cm.
+- Alderman had a separate R/Python writer error: SLB occupied five rather than
+  six columns. Full-width values could lose their first character; for example,
+  SSKS 10.08 became 0.08. The writer now uses six-column SLB. All three USDA
+  writers also use DSSAT's profile/site header widths; conductivity values of
+  100 or more use one decimal to fit five numeric columns. Alderman missing
+  conductivity/decimal values retain the `-99` sentinel without overflowing.
+- `soil_file_issue(path)` returns `NULL`/`None` or a diagnostic, reading actual
+  header-defined columns, not whitespace-separated apparent depths. It checks
+  finite layer fields, alignment, positive/increasing depths and the 19-layer
+  limit. This is a **format check**, not a physiological-quality guarantee.
+  The gridded driver uses it before model execution. It does not change files.
+
+**Offline recovery, without new downloads.** Keep original caches as evidence.
+For SSURGO and gNATSGO, their existing layer mapping CSVs contain the properties
+needed to regenerate `.SOL` files. Both languages expose the same helper:
+
+```r
+rebuild_soil_files_from_mapping("soil/study_SSURGO.CSV",
+                              "soil/study_SSURGO_rebuilt", "SSURGO")
+```
+
+```python
+from dssatutils import rebuild_soil_files_from_mapping
+rebuild_soil_files_from_mapping("soil/study_SSURGO.CSV",
+                              "soil/study_SSURGO_rebuilt", "SSURGO")
+```
+
+The destination must not exist (even as an empty directory). The result has
+`ID` and `path` columns, preserves leading-zero IDs and stored property values,
+and does not rerun pedotransfer calculations or download data. Use `GNATSGO`
+for that source. **Alderman's mapping CSV contains metadata, not full layers**:
+its legacy `.SOL` layer text must instead be read using the historical
+five-column SLB layout and passed to the corrected Alderman writer. Do not
+discard those files. Do not apply a generic formatter or whitespace parser to
+them: horizon names can contain spaces.
+
+R/Python parity note: validation, USDA writer corrections, recovery API and
+test fixtures are mirrored. Real-cache verification rebuilt 143 SSURGO/gNATSGO
+profiles identically byte-for-byte in R and Python; 72 Alderman profiles were
+also reconstructed and validated in an isolated diagnostic. Native DSSAT
+smoke runs completed with each of the three corrected soil writer outputs.
+The 300/200 km sweep was not rerun and no production cache was overwritten.
+Tests: `tests/test_input_cache_integrity.py` and its `tests/testthat/` twin.
+
+Install/reload the corrected shared package in a **new** session after any
+active sweep ends. Pinned releases do not yet contain uncommitted local fixes;
+the current R session does not automatically reload edited package source.
+
 - **Optional weather repair and QA** is available after provider downloads via
   `repair_weather_missing_values()`, `repair_weather_date_gaps()`,
   `repair_weather_temperature_inversions()`, and `audit_weather_quality()`.

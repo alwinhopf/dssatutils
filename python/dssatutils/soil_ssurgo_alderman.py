@@ -822,7 +822,7 @@ def _build_simple_fallback_profile(lat: float, lon: float, point_id: str, mukeys
 # ---- DSSAT output formatting & file writer -------------------------------
 
 def format_dssat_decimal(x, digits=3, width=5) -> str:
-    if x is None or math.isnan(x):
+    if x is None or math.isnan(x) or x == -99:
         return f"{'-99':>{width}s}"
     out = f"{x:{width}.{digits}f}"
     if out.startswith("0."):
@@ -838,9 +838,9 @@ def _write_dssat_soil_file(profile, output_dir):
         "*SOILS: USA SSURGO Soil Profiles",
         "! Generated from SSURGO database using full-profile logic",
         "",
-        f"*{profile_id:<10s} SSURGO        {profile['latitude']:9.3f} {profile['longitude']:9.3f}",
+        f"*{profile_id:<10s}  {'SSURGO':<11s} {'-99':<5s} {profile['layers']['SLB'].max():5.0f} SSURGO Alderman profile",
         "@SITE        COUNTRY          LAT     LONG SCS FAMILY",
-        f" {profile['site']:<11s} {profile['country']:<10s} {profile['latitude']:9.3f} {profile['longitude']:9.3f} {profile['scs_family']:<20s}",
+        f" {profile['site']:<11s} {profile['country']:<11s} {profile['latitude']:8.3f} {profile['longitude']:8.3f} {profile['scs_family']:<20s}",
         "@ SCOM  SALB  SLU1  SLDR  SLRO  SLNF  SLPF  SMHB  SMPX  SMKE",
         f" {profile['scom']:>5s} {profile['salb']:5.2f} {profile['slu1']:5.1f} {profile['sldr']:5.2f} {profile['slro']:5.0f} {profile['slnf']:5.0f} {profile['slpf']:5.0f} {profile['smhb']:>5s} {profile['smpx']:>5s} {profile['smke']:>5s}",
         "@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI  SLCF  SLNI  SLHW  SLHB  SCEC  SADC"
@@ -854,6 +854,8 @@ def _write_dssat_soil_file(profile, output_dir):
         ssat = format_dssat_decimal(lyr["SSAT"], 3, 5)
         srgf = lyr["SRGF"] if not math.isnan(lyr["SRGF"]) else 1.0
         ssks = lyr["SSKS"] if not math.isnan(lyr["SSKS"]) else -99.0
+        ssks_text = (f"{'-99':>5s}" if ssks == -99 else
+                     f"{ssks:5.1f}" if ssks >= 100 else f"{ssks:5.2f}")
         sbdm = lyr["SBDM"] if not math.isnan(lyr["SBDM"]) else -99.0
         sloc = lyr["SLOC"] if not math.isnan(lyr["SLOC"]) else -99.0
         slcl = lyr["SLCL"] if not math.isnan(lyr["SLCL"]) else -99.0
@@ -866,11 +868,10 @@ def _write_dssat_soil_file(profile, output_dir):
         scec = format_dssat_decimal(lyr["SCEC"], 3, 5) if not math.isnan(lyr["SCEC"]) else "  -99"
         sadc = format_dssat_decimal(lyr["SADC"], 3, 5) if not math.isnan(lyr["SADC"]) else "  -99"
 
-        # Build layer line matching R sprint format:
-        # "%5d %5s %5s %5s %5s %5.2f %5.2f %5.2f %5.2f %5.1f %5.1f %5.0f %5s %5s %5s %5s %5s"
+        # SLB occupies SIX columns; later fields occupy five plus a separator.
         line = (
-            f"{slb:5d} {slmh:>5s} {slll:>5s} {sdul:>5s} {ssat:>5s} "
-            f"{srgf:5.2f} {ssks:5.2f} {sbdm:5.2f} {sloc:5.2f} "
+            f"{slb:6d} {slmh:>5s} {slll:>5s} {sdul:>5s} {ssat:>5s} "
+            f"{srgf:5.2f} {ssks_text} {sbdm:5.2f} {sloc:5.2f} "
             f"{slcl:5.1f} {slsi:5.1f} {slcf:5.0f} "
             f"{slni:>5s} {slhw:>5s} {slhb:>5s} {scec:>5s} {sadc:>5s}"
         )

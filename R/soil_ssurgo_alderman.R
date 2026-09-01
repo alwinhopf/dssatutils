@@ -691,13 +691,13 @@ build_dssat_profile_from_component <- function(component_row, horizon_tbl, point
 
 # ---- DSSAT writing -----------------------------------------------------------
 format_dssat_decimal <- function(x, digits = 3, width = 5) {
-  if (is.na(x)) return(sprintf(paste0("%", width, "s"), "-99"))
+  if (is.na(x) || x == -99) return(sprintf(paste0("%", width, "s"), "-99"))
   out <- sprintf(paste0("%", width, ".", digits, "f"), x)
   sub("^0", " ", out)
 }
 
 format_dssat_numeric <- function(x, width = 5, digits = 1) {
-  if (is.na(x)) return(sprintf(paste0("%", width, "s"), "-99"))
+  if (is.na(x) || x == -99) return(sprintf(paste0("%", width, "s"), "-99"))
   sprintf(paste0("%", width, ".", digits, "f"), x)
 }
 
@@ -709,10 +709,11 @@ write_dssat_soil_file <- function(profile, output_dir) {
   writeLines("*SOILS: USA SSURGO Soil Profiles", con)
   writeLines("! Generated from SSURGO database using full-profile logic", con)
   writeLines("", con)
-  writeLines(sprintf("*%-10s SSURGO        %9.3f %9.3f",
-                     substr(profile$profile_id, 1, 10), profile$latitude, profile$longitude), con)
+  writeLines(sprintf("*%-10s  %-11s %-5s %5.0f %s",
+                     substr(profile$profile_id, 1, 10), "SSURGO", "-99",
+                     max(profile$layers$SLB), "SSURGO Alderman profile"), con)
   writeLines("@SITE        COUNTRY          LAT     LONG SCS FAMILY", con)
-  writeLines(sprintf(" %-11s %-10s %9.3f %9.3f %s",
+  writeLines(sprintf(" %-11s %-11s %8.3f %8.3f %s",
                      substr(profile$site, 1, 11), profile$country,
                      profile$latitude, profile$longitude,
                      substr(profile$scs_family, 1, 20)), con)
@@ -726,14 +727,14 @@ write_dssat_soil_file <- function(profile, output_dir) {
   for (i in seq_len(nrow(profile$layers))) {
     lyr <- profile$layers[i, ]
     line <- sprintf(
-      "%5d %5s %5s %5s %5s %5.2f %5.2f %5.2f %5.2f %5.1f %5.1f %5.0f %5s %5s %5s %5s %5s",
+      "%6d %5s %5s %5s %5s %5.2f %5s %5.2f %5.2f %5.1f %5.1f %5.0f %5s %5s %5s %5s %5s",
       as.integer(lyr$SLB),
       substr(sanitize_char(lyr$SLMH, "-99"), 1, 5),
       format_dssat_decimal(lyr$SLLL, 3, 5),
       format_dssat_decimal(lyr$SDUL, 3, 5),
       format_dssat_decimal(lyr$SSAT, 3, 5),
       coalesce_num(lyr$SRGF, 1),
-      coalesce_num(lyr$SSKS, -99),
+      format_dssat_numeric(lyr$SSKS, 5, ifelse(!is.na(lyr$SSKS) && lyr$SSKS >= 100, 1, 2)),
       coalesce_num(lyr$SBDM, -99),
       coalesce_num(lyr$SLOC, -99),
       coalesce_num(lyr$SLCL, -99),
