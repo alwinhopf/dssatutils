@@ -40,6 +40,45 @@ test_that("temperature inversion repair uses neighboring Tmax/Tmin means", {
   expect_true(any(grepl("issue=TMIN_GT_TMAX status=repaired", readLines(log_file))))
 })
 
+test_that("temperature inversion repair supports bounded swap", {
+  wth <- tempfile(fileext = ".WTH")
+  log_file <- tempfile(fileext = ".log")
+  writeLines(c(
+    "$WEATHER DATA: TEST",
+    "@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT",
+    "  TEST   0.0000   0.0000   -99  20.0  10.0   2.0   2.0",
+    "@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+    "2024001  15.0  20.0  10.0   0.0   8.0  60.0   2.0",
+    "2024002  15.0  14.0  15.0   0.0   9.0  60.0   2.0",
+    "2024003  15.0  10.0  15.0   0.0  10.0  60.0   2.0",
+    "2024004  15.0  24.0  14.0   0.0  11.0  60.0   2.0"
+  ), wth, useBytes = TRUE)
+
+  summary <- repair_weather_file_temperature_inversions(
+    wth,
+    method = "swap",
+    max_inversion_c = 2.0,
+    log_file = log_file
+  )
+
+  expect_equal(summary$status, "repaired")
+  expect_equal(summary$repaired_count, 1L)
+  expect_equal(summary$unrepaired_count, 1L)
+
+  rows <- readLines(wth, warn = FALSE)
+  rows <- rows[grepl("^\\s*2024", rows)]
+  dat <- utils::read.table(
+    text = paste(rows, collapse = "\n"),
+    col.names = c("DATE", "SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND"),
+    colClasses = c("character", rep("numeric", 7)),
+    stringsAsFactors = FALSE
+  )
+  expect_equal(dat[dat$DATE == "2024002", "TMAX"], 15.0)
+  expect_equal(dat[dat$DATE == "2024002", "TMIN"], 14.0)
+  expect_equal(dat[dat$DATE == "2024003", "TMAX"], 10.0)
+  expect_equal(dat[dat$DATE == "2024003", "TMIN"], 15.0)
+})
+
 test_that("date gap repair inserts missing DSSAT date row from neighbor means", {
   wth <- tempfile(fileext = ".WTH")
   log_file <- tempfile(fileext = ".log")

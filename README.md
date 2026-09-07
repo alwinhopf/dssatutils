@@ -133,24 +133,90 @@ deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
 
 ## Known limitations / notes
 
+### Input-cache integrity fixes (2026-08-31)
+
+- R GRIDMET extraction now retains an NA row for each out-of-coverage point.
+  Previously `terra` dropped those cells and subsequent weather rows were
+  assigned to the wrong point IDs. Python already retained invalid rows; its
+  extraction helper now shares the same regression cases (invalid points at
+  either end/in the middle, duplicate cells, out-of-order cells, single layers).
+  Native NetCDF caches are reusable. Existing affected `.WTH` files are NOT
+  repaired by installing this change: re-extract into a new weather directory,
+  using the same native cache, then rebuild dependent model runs/results.
+- SSURGO/gNATSGO's older R vector writer inserted an extra space before each
+  layer after the first. Although the row writer was corrected on August 30,
+  existing caches remained reusable under whitespace-only preflight checks.
+  In DSSAT's fixed columns an intended 200 cm depth could become 20 cm.
+- Alderman had a separate R/Python writer error: SLB occupied five rather than
+  six columns. Full-width values could lose their first character; for example,
+  SSKS 10.08 became 0.08. The writer now uses six-column SLB. All three USDA
+  writers also use DSSAT's profile/site header widths; conductivity values of
+  100 or more use one decimal to fit five numeric columns. Alderman missing
+  conductivity/decimal values retain the `-99` sentinel without overflowing.
+- `soil_file_issue(path)` returns `NULL`/`None` or a diagnostic, reading actual
+  header-defined columns, not whitespace-separated apparent depths. It checks
+  finite layer fields, alignment, positive/increasing depths and the 19-layer
+  limit. This is a **format check**, not a physiological-quality guarantee.
+  The gridded driver uses it before model execution. It does not change files.
+
+**Offline recovery, without new downloads.** Keep original caches as evidence.
+For SSURGO and gNATSGO, their existing layer mapping CSVs contain the properties
+needed to regenerate `.SOL` files. Both languages expose the same helper:
+
+```r
+rebuild_soil_files_from_mapping("soil/study_SSURGO.CSV",
+                              "soil/study_SSURGO_rebuilt", "SSURGO")
+```
+
+```python
+from dssatutils import rebuild_soil_files_from_mapping
+rebuild_soil_files_from_mapping("soil/study_SSURGO.CSV",
+                              "soil/study_SSURGO_rebuilt", "SSURGO")
+```
+
+The destination must not exist (even as an empty directory). The result has
+`ID` and `path` columns, preserves leading-zero IDs and stored property values,
+and does not rerun pedotransfer calculations or download data. Use `GNATSGO`
+for that source. **Alderman's mapping CSV contains metadata, not full layers**:
+its legacy `.SOL` layer text must instead be read using the historical
+five-column SLB layout and passed to the corrected Alderman writer. Do not
+discard those files. Do not apply a generic formatter or whitespace parser to
+them: horizon names can contain spaces.
+
+R/Python parity note: validation, USDA writer corrections, recovery API and
+test fixtures are mirrored. Real-cache verification rebuilt 143 SSURGO/gNATSGO
+profiles identically byte-for-byte in R and Python; 72 Alderman profiles were
+also reconstructed and validated in an isolated diagnostic. Native DSSAT
+smoke runs completed with each of the three corrected soil writer outputs.
+The 300/200 km sweep was not rerun and no production cache was overwritten.
+Tests: `tests/test_input_cache_integrity.py` and its `tests/testthat/` twin.
+
+Install/reload the corrected shared package in a **new** session after any
+active sweep ends. Pinned releases do not yet contain uncommitted local fixes;
+the current R session does not automatically reload edited package source.
+
 - **Optional weather repair and QA** is available after provider downloads via
   `repair_weather_missing_values()`, `repair_weather_date_gaps()`,
   `repair_weather_temperature_inversions()`, and `audit_weather_quality()`.
-  Repair functions only modify short runs with valid before/after neighbors;
+  Repair functions support both neighbor averaging and bounded same-day swap
+  (`method = "neighbor"` or `"swap"`, with `max_inversion_c = 2.0`);
   the audit writes flag-only findings to CSV and appends notes to
   `weather_repair.log`. Provider `NA`/`NaN`/infinite values are normalized to
   DSSAT's numeric `-99` marker before writing, and the repair reader also accepts
   those literal tokens in older cached files.
 - **Weather-file validation** via `is_wth_valid()` understands DSSAT's
   fixed-width daily rows (including adjacent negative fields), requires
-  consecutive dates, and rejects physically impossible forcing while retaining
-  the standard `-99` missing-value sentinel. Callers can pass
-  `required_columns` to reject `-99` in model-essential fields while still
-  permitting optional missing humidity/wind inputs. Like the other adapters,
-  AgERA5 writes the provider values without a separate physical-quality gate;
-  consumer engines apply `is_wth_valid()` uniformly afterward. Its recommended
-  time-series cache uses globally anchored 0.1-degree cells or fixed tiles; the
-  legacy gridded cache remains keyed by the exact requested geographic area.
+  consecutive dates, validates optional `start_year` and `end_year` bounds, and
+  rejects physically impossible forcing while retaining the standard `-99` missing-value sentinel.
+  Callers can pass `required_columns` to reject `-99` in model-essential fields while still
+  permitting optional missing humidity/wind inputs.
+- **AgERA5 time-series retrieval & assembly**:
+  The time-series backend enforces per-cell CSV cache validation (`_valid_agera5_timeseries_csv`),
+  atomic lock acquisition across workers, and inspection of the canonical CSV destination
+  after requests return (even on non-path return objects). Incomplete annual jobs are not
+  silently skipped; the assembler verifies exact calendar date coverage across the requested
+  years before serialization. Incomplete points are reported without publishing partial
+  `.WTH` files; the engine records exhausted attempts as retryable failures. Callers can enable `cache_only = True` for offline sweeps.
 - **GridMET** RH2M and TDEW are *estimated* (`TDEW ≈ TMIN − 2.5`, RH from the
   diurnal temperature range), not measured.
 - **Open-Meteo** uses the API's `dew_point_2m_mean` and
@@ -167,3 +233,35 @@ deliberately bump the pin. Workflow: branch → CI smoke tests → merge → tag
 
 See `SHARED_UTILS_MIGRATION.md` in the Gridded Run Tutorial repo for the full
 extraction history and the remaining packaging-polish checklist.
+
+### Weather recovery integrity (2026-09-06)
+
+R and Python now interpret `start_year` as January 1 and `end_year` as
+December 31. `start_date` / `end_date` explicitly override those endpoints for
+partial-year requests; a consecutive superset is allowed, but missing boundary
+days are not. AgERA5 engine validation freezes an explicit endpoint capped at
+its existing ten-day availability allowance. This does not change that allowance
+or the configured temperature-repair policy.
+
+Annual AgERA5 CSV checks reject any nonfinite or `-99` forcing value, invalid
+coordinates, dates missing within a cell, duplicates, and cells outside the
+requested area. Provider assembly also checks all seven forcing variables before
+publication. Temperature inversions remain raw and are handled by optional shared
+QC, not silently corrected by the downloader.
+
+Time-series cache access uses OS byte-range locks compatible across R (`filelock`,
+an R dependency) and Python (standard-library locking plus a thread guard).
+A process exit releases ownership; elapsed time never steals a live lock. Empty
+`.lock` files intentionally remain and must not be deleted during concurrent use.
+Old directory-style `.lock` entries are not stolen: remove those only after
+confirming their previous owners have stopped. Deploy/restart all workers together;
+older package versions do not implement this protocol. Downloads use private
+staging directories, validate before same-filesystem publication, and preserve
+invalid prior cache bytes in `.invalid-*` evidence files when replacing them.
+Cache-only misses do not delete prior files. R PSOCK workers explicitly resolve
+exported downloader helpers rather than mixing old installed namespace functions.
+
+Offline regressions: `test_weather_recovery_integrity.py` and its R twin cover
+boundary/leap dates, individual missing values, multi-cell tiles, staged client
+errors, cache preservation, and parallel assembly. Python tests additionally run
+R/Python lock contention and process-exit recovery on the local platform.

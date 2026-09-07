@@ -42,8 +42,14 @@ def _wth_code_to_date(code: str):
 
 
 def is_wth_valid(path: str | Path, end_year: int | None = None,
-                 required_columns: tuple[str, ...] | list[str] | None = None) -> bool:
+                 required_columns: tuple[str, ...] | list[str] | None = None,
+                 start_year: int | None = None,
+                 start_date: str | date | None = None,
+                 end_date: str | date | None = None) -> bool:
     """Return whether *path* is a complete, parseable DSSAT weather file.
+
+    Year bounds require January 1 / December 31; explicit start_date/end_date
+    override those endpoints. A consecutive superset is accepted.
 
     ``required_columns`` optionally rejects DSSAT ``-99`` missing markers in
     forcing variables required by the caller's model configuration.
@@ -79,6 +85,13 @@ def is_wth_valid(path: str | Path, end_year: int | None = None,
         if any(current - previous != timedelta(days=1)
                for previous, current in zip(dates, dates[1:])):
             return False
-        return end_year is None or dates[-1].year >= int(end_year)
+        requested_start = date.fromisoformat(str(start_date)) if start_date is not None else (
+            date(int(start_year), 1, 1) if start_year is not None else None)
+        requested_end = date.fromisoformat(str(end_date)) if end_date is not None else (
+            date(int(end_year), 12, 31) if end_year is not None else None)
+        if requested_start and requested_end and requested_start > requested_end:
+            return False
+        return ((requested_start is None or dates[0] <= requested_start)
+                and (requested_end is None or dates[-1] >= requested_end))
     except (OSError, UnicodeError, ValueError):
         return False

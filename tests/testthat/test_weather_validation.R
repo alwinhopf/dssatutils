@@ -18,7 +18,7 @@ test_that("fixed-width adjacent negative weather values are valid", {
     sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f", "2024002", 13, -9, -11, 0, -14, 42, 3.2)
   )
   write_sample_wth(path, rows)
-  expect_true(is_wth_valid(path, end_year = 2024))
+  expect_true(is_wth_valid(path, end_date = "2024-01-02"))
 })
 
 test_that("weather validation rejects date gaps", {
@@ -27,7 +27,7 @@ test_that("weather validation rejects date gaps", {
     "2024001 12.0 10.0 1.0 0.0 0.0 40.0 3.0",
     "2024003 12.0 10.0 1.0 0.0 0.0 40.0 3.0"
   ))
-  expect_false(is_wth_valid(path, end_year = 2024))
+  expect_false(is_wth_valid(path, end_date = "2024-01-02"))
 })
 
 test_that("weather validation rejects absolute-zero temperatures", {
@@ -44,10 +44,10 @@ test_that("weather validation can require complete core forcing", {
     "2024001 -99 10.0 1.0 0.0 0.0 40.0 -99",
     "2024002 12.0 10.0 1.0 0.0 0.0 40.0 -99"
   ))
-  expect_true(is_wth_valid(path, end_year = 2024))
+  expect_true(is_wth_valid(path, end_date = "2024-01-02"))
   expect_false(is_wth_valid(
     path,
-    end_year = 2024,
+    end_date = "2024-01-02",
     required_columns = c("SRAD", "TMAX", "TMIN", "RAIN")
   ))
 })
@@ -61,8 +61,8 @@ test_that("weather validation can require all AgERA5 forcing", {
   core <- c("SRAD", "TMAX", "TMIN", "RAIN")
   agera5 <- c(core, "TDEW", "RH2M", "WIND")
 
-  expect_true(is_wth_valid(path, end_year = 2024, required_columns = core))
-  expect_false(is_wth_valid(path, end_year = 2024, required_columns = agera5))
+  expect_true(is_wth_valid(path, end_date = "2024-01-02", required_columns = core))
+  expect_false(is_wth_valid(path, end_date = "2024-01-02", required_columns = agera5))
 })
 
 test_that("AgERA5 writer defers physical validation to the shared validator", {

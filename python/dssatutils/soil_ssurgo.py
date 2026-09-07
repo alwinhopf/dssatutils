@@ -214,11 +214,19 @@ def _calc_layer_props(props_df: pd.DataFrame,
     if total_w == 0:
         return None
 
+    bd_series = df["dbthirdbar_r"]
+    if bd_series.notna().any() and total_w > 0:
+        bd_val = (bd_series * w).sum() / total_w
+        if np.isnan(bd_val) or bd_val <= 0:
+            bd_val = 1.4
+    else:
+        bd_val = 1.4
+
     return pd.Series({
         "clay_pct": (df["claytotal_r"] * w).sum() / total_w,
         "sand_pct": (df["sandtotal_r"] * w).sum() / total_w,
         "om_pct":   (df["om_r"] * w).sum() / total_w,
-        "bulk_density": (df["dbthirdbar_r"] * w).sum() / total_w,
+        "bulk_density": bd_val,
     })
 
 
@@ -239,9 +247,9 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         "*SOILS: USA SSURGO Soil Profiles",
         "! Generated from SSURGO database",
         "",
-        f"*{soil_id:<6s}  SSURGO        {lat:9.3f} {lon:9.3f}",
+        f"*{soil_id:<10s}  {'SSURGO':<11s} {'-99':<5s} {profile['depth_bottom'].max():5.0f} SSURGO profile",
         "@SITE        COUNTRY          LAT     LONG SCS FAMILY",
-        f" {soil_id:<11s} USA         {lat:9.3f} {lon:9.3f} ",
+        f" {soil_id:<11s} {'USA':<11s} {lat:8.3f} {lon:8.3f} ",
         "@ SCOM  SALB  SLU1  SLDR  SLRO  SLNF  SLPF  SMHB  SMPX  SMKE",
         "    BN   .13     6    .6    73     1     1 IB001 IB001 IB001",
         "@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI  SLCF  SLNI  SLHW  SLHB  SCEC  SADC",
@@ -262,7 +270,8 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         depth_str = f"{depth:6d}" if depth >= 10 else f"{depth:6d}"
         om_sloc = layer["om_pct"] / 1.724  # OM → SOC
         ssks_val = layer["SSKS"] if "SSKS" in layer and pd.notna(layer["SSKS"]) and layer["SSKS"] > 0 else None
-        ssks_str = f"{min(999.0, float(ssks_val)):6.2f}" if ssks_val is not None else "   -99"
+        ssks_str = (f"{min(999.0, float(ssks_val)):6.1f}" if ssks_val >= 100 else
+                    f"{float(ssks_val):6.2f}") if ssks_val is not None else "   -99"
         lines.append(
             f"{depth_str}   -99 {slll} {sdul} {ssat}  1.00{ssks_str}"
             f" {layer['bulk_density']:5.2f} {om_sloc:5.2f}"
@@ -362,7 +371,7 @@ def _process_point(args: dict):
         clay = float(agg["clay_pct"]) if not np.isnan(agg["clay_pct"]) else 20.0
         sand = float(agg["sand_pct"]) if not np.isnan(agg["sand_pct"]) else 40.0
         om   = float(agg["om_pct"])   if not np.isnan(agg["om_pct"])   else 1.0
-        bd   = float(agg["bulk_density"]) if not np.isnan(agg["bulk_density"]) else 1.4
+        bd   = float(agg["bulk_density"]) if (not np.isnan(agg["bulk_density"]) and float(agg["bulk_density"]) > 0) else 1.4
         silt = max(0.0, 100.0 - clay - sand)
 
         SLLL, SDUL, SSAT = _saxton_rawls(sand, clay, om)

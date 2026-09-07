@@ -54,7 +54,12 @@ calculate_soil_properties <- function(soil_properties, top_depth, bottom_depth) 
       sand_pct = sum(weighted_sand, na.rm = TRUE) / sum(thickness * comppct_r, na.rm = TRUE),
       silt_pct = 100 - clay_pct - sand_pct,
       om_pct = sum(weighted_om, na.rm = TRUE) / sum(thickness * comppct_r, na.rm = TRUE),
-      bulk_density = sum(weighted_bd, na.rm = TRUE) / sum(thickness * comppct_r, na.rm = TRUE),
+      bulk_density = {
+        tot_thick <- sum(thickness * comppct_r, na.rm = TRUE)
+        w_bd <- sum(weighted_bd, na.rm = TRUE)
+        bd <- if (tot_thick > 0 && any(!is.na(dbthirdbar_r))) w_bd / tot_thick else NA_real_
+        dplyr::coalesce(if (is.na(bd) || is.nan(bd) || bd <= 0) NA_real_ else bd, 1.4)
+      },
       .groups = 'drop'
     )
   grouped
@@ -87,13 +92,14 @@ format_dssat_soil_single <- function(profile_data, output_dir) {
   cat("*SOILS: USA SSURGO Soil Profiles\n", file = filename)
   cat("! Generated from SSURGO database\n\n", file = filename, append = TRUE)
   
-  cat(sprintf("*%-6s  SSURGO        %9.3f %9.3f\n",
-              as.character(soil_id), profile_data$latitude[1], profile_data$longitude[1]),
+  profile_depth <- max(as.numeric(sub(".*-", "", sub("cm", "", profile_data$depth_range))))
+  cat(sprintf("*%-10s  %-11s %-5s %5.0f %s\n",
+              soil_id, "SSURGO", "-99", profile_depth, "SSURGO profile"),
       file = filename, append = TRUE)
   
   cat("@SITE        COUNTRY          LAT     LONG SCS FAMILY\n", file = filename, append = TRUE)
-  cat(sprintf(" %-11s USA         %9.3f %9.3f \n",
-              as.character(soil_id), profile_data$latitude[1], profile_data$longitude[1]),
+  cat(sprintf(" %-11s %-11s %8.3f %8.3f \n",
+              soil_id, "USA", profile_data$latitude[1], profile_data$longitude[1]),
       file = filename, append = TRUE)
   
   cat("@ SCOM  SALB  SLU1  SLDR  SLRO  SLNF  SLPF  SMHB  SMPX  SMKE\n", file = filename, append = TRUE)
@@ -114,12 +120,14 @@ format_dssat_soil_single <- function(profile_data, output_dir) {
       depth_format <- sprintf("%6d", depth_val)
       ssks_val <- if ("SSKS" %in% names(layer)) layer$SSKS else rep(NA_real_, nrow(layer))
       ssks_str <- ifelse(!is.na(ssks_val) & ssks_val > 0,
-                         sprintf("%6.2f", pmin(999.0, ssks_val)),
+                         ifelse(ssks_val >= 100, sprintf("%6.1f", pmin(999.0, ssks_val)),
+                                sprintf("%6.2f", ssks_val)),
                          "   -99")
       
+      coalesce_bd <- ifelse(is.na(layer$bulk_density) | layer$bulk_density <= 0, 1.4, layer$bulk_density)
       cat(paste0(sprintf("%s   -99 %s %s %s  1.00%s %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
                          depth_format, slll, sdul, ssat, ssks_str,
-                         layer$bulk_density, layer$om_pct/1.724, layer$clay_pct, layer$silt_pct),
+                         coalesce_bd, layer$om_pct/1.724, layer$clay_pct, layer$silt_pct),
                  collapse = ""),
           file = filename, append = TRUE)
     })

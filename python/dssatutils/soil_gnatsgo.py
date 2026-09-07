@@ -138,9 +138,9 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         "*SOILS: USA gNATSGO Soil Profiles",
         "! Generated from gNATSGO (SoilWeb WCS mukey grid + USDA SDA tabular)",
         "",
-        f"*{soil_id:<6s}  gNATSGO       {lat:9.3f} {lon:9.3f}",
+        f"*{soil_id:<10s}  {'gNATSGO':<11s} {'-99':<5s} {profile['depth_bottom'].max():5.0f} gNATSGO profile",
         "@SITE        COUNTRY          LAT     LONG SCS FAMILY",
-        f" {soil_id:<11s} USA         {lat:9.3f} {lon:9.3f} ",
+        f" {soil_id:<11s} {'USA':<11s} {lat:8.3f} {lon:8.3f} ",
         "@ SCOM  SALB  SLU1  SLDR  SLRO  SLNF  SLPF  SMHB  SMPX  SMKE",
         "    BN   .13     6    .6    73     1     1 IB001 IB001 IB001",
         "@  SLB  SLMH  SLLL  SDUL  SSAT  SRGF  SSKS  SBDM  SLOC  SLCL  SLSI  SLCF  SLNI  SLHW  SLHB  SCEC  SADC",
@@ -154,7 +154,8 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         depth = int(layer["depth_bottom"])
         om_sloc = layer["om_pct"] / 1.724  # OM → SOC
         ssks_val = layer["SSKS"] if "SSKS" in layer and pd.notna(layer["SSKS"]) and layer["SSKS"] > 0 else None
-        ssks_str = f"{min(999.0, float(ssks_val)):6.2f}" if ssks_val is not None else "   -99"
+        ssks_str = (f"{min(999.0, float(ssks_val)):6.1f}" if ssks_val >= 100 else
+                    f"{float(ssks_val):6.2f}") if ssks_val is not None else "   -99"
         lines.append(
             f"{depth:6d}   -99 {slll} {sdul} {ssat}  1.00{ssks_str}"
             f" {layer['bulk_density']:5.2f} {om_sloc:5.2f}"

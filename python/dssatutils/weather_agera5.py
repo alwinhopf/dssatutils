@@ -28,6 +28,10 @@
 
 import os
 import glob
+import shutil
+import time
+import tempfile
+import threading
 import zipfile
 import logging
 from datetime import date, timedelta
@@ -282,51 +286,191 @@ def _agera5_timeseries_cache_path(cache_dir: str, year: int, area, data_format: 
     return os.path.join(cache_dir, f"agera5_timeseries_{year}_{tag}.{ext}")
 
 
-def _download_agera5_timeseries(year: int, area, cache_dir: str,
-                                data_format: str = "csv"):
-    """Download one all-variable AgERA5 time-series chunk for a year."""
-    data_format = str(data_format or "csv").lower()
-    if data_format != "csv":
-        raise ValueError("AgERA5 time-series backend currently supports data_format='csv'.")
+_AGERA5_THREAD_LOCKS = {}
+_AGERA5_THREAD_LOCKS_GUARD = threading.Lock()
 
-    bounds = _date_bounds_for_year(year)
-    if bounds is None:
+
+def _agera5_acquire_lock(lock_path: str, max_wait_sec: float = 120.0, stale_sec=None):
+    """Match R filelock's OS byte-range lock; never remove or age out an owner."""
+    with _AGERA5_THREAD_LOCKS_GUARD:
+        local = _AGERA5_THREAD_LOCKS.setdefault(os.path.abspath(lock_path), threading.Lock())
+    start = time.monotonic()
+    if not local.acquire(timeout=max_wait_sec):
         return None
-    dest = _agera5_timeseries_cache_path(cache_dir, year, area, data_format)
-    if _valid_agera5_timeseries_csv(dest):
-        return dest
-
-    import cdsapi  # imported lazily so the module loads without the key/pkg
-
-    req = {
-        "variable": [v[0] for v in _AGERA5_TIMESERIES_VARS.values()],
-        "date": [bounds[0], bounds[1]],
-        "data_format": data_format,
-        "area": list(area),
-    }
+    stream = None
     try:
-        partial = dest + ".partial"
-        if os.path.exists(partial):
-            os.remove(partial)
-        _make_cds_client(cdsapi).retrieve(_CDS_TIMESERIES_DATASET, req, partial)
-        if not _valid_agera5_timeseries_csv(partial):
-            raise ValueError("CDS response is not a valid AgERA5 time-series CSV")
-        os.replace(partial, dest)
-        return dest
-    except Exception as exc:  # noqa: BLE001
-        print(f"  AgERA5 time-series download failed ({year}, area={area}): {exc}")
-        return None
+        if os.path.isdir(lock_path):  # old directory lock: do not steal it
+            local.release()
+            return None
+        stream = open(lock_path, "a+b")
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return stream, local
+            except OSError:
+                if time.monotonic() - start >= max_wait_sec:
+                    stream.close()
+                    local.release()
+                    return None
+                time.sleep(min(0.1, max_wait_sec))
+    except BaseException:
+        if stream is not None:
+            stream.close()
+        local.release()
+        raise
 
 
-def _valid_agera5_timeseries_csv(path: str) -> bool:
-    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+def _agera5_release_lock(lock) -> None:
+    if lock is not None:
+        stream, local = lock
+        stream.close()  # kernel releases byte-range lock, even on process exit
+        local.release()
+
+
+def _valid_agera5_timeseries_csv(path: str, expected_year: int | None = None, bounds=None, area=None) -> bool:
+    if not path or not os.path.isfile(path) or os.path.getsize(path) == 0:
         return False
     try:
-        sample = pd.read_csv(path, nrows=5)
+        df = pd.read_csv(path)
     except Exception:  # noqa: BLE001
         return False
-    required = {"valid_time", "latitude", "longitude"}
-    return bool(len(sample)) and required.issubset({str(c).lower() for c in sample.columns})
+    if df.empty:
+        return False
+
+    csv_cols_lower = {str(c).lower(): c for c in df.columns}
+    req_cols = [
+        "valid_time", "latitude", "longitude",
+        "solar_radiation_flux", "temperature_air_2m_max_24h", "temperature_air_2m_min_24h",
+        "precipitation_flux", "dew_point_temperature_2m_mean_24h", "relative_humidity_2m_15h",
+        "wind_speed_10m_mean_24h"
+    ]
+    if not all(r in csv_cols_lower for r in req_cols):
+        return False
+
+    vt_col = csv_cols_lower["valid_time"]
+    try:
+        dates = pd.to_datetime(df[vt_col]).dt.date
+    except Exception:  # noqa: BLE001
+        return False
+    if dates.isna().any():
+        return False
+
+    lat_col = csv_cols_lower["latitude"]
+    lon_col = csv_cols_lower["longitude"]
+
+    try:
+        lat = pd.to_numeric(df[lat_col], errors="raise").to_numpy(dtype=float)
+        lon = pd.to_numeric(df[lon_col], errors="raise").to_numpy(dtype=float)
+    except (TypeError, ValueError):
+        return False
+    if not (np.isfinite(lat).all() and np.isfinite(lon).all()):
+        return False
+    if (np.abs(lat) > 90).any() or (np.abs(lon) > 180).any():
+        return False
+    if area is not None and ((lat > area[0] + 1e-6) | (lat < area[2] - 1e-6)
+                             | (lon < area[1] - 1e-6) | (lon > area[3] + 1e-6)).any():
+        return False
+    for rc in req_cols[3:]:
+        col_name = csv_cols_lower[rc]
+        vals = pd.to_numeric(df[col_name], errors="coerce")
+        if (~np.isfinite(vals) | (vals == -99)).any():
+            return False
+
+    if expected_year is not None:
+        bounds = bounds or _date_bounds_for_year(int(expected_year))
+        if bounds is None:
+            return False
+        exp_start = date.fromisoformat(bounds[0])
+        exp_end = date.fromisoformat(bounds[1])
+        expected_days = (exp_end - exp_start).days + 1
+
+        cells = df[[lat_col, lon_col]].drop_duplicates()
+        for _, cell in cells.iterrows():
+            mask = (lat == float(cell[lat_col])) & (lon == float(cell[lon_col]))
+            cell_dates = sorted(dates[mask].tolist())
+            if len(cell_dates) != expected_days:
+                return False
+            if len(set(cell_dates)) != len(cell_dates):
+                return False
+            if cell_dates[0] != exp_start or cell_dates[-1] != exp_end:
+                return False
+            for i in range(len(cell_dates) - 1):
+                if (cell_dates[i + 1] - cell_dates[i]).days != 1:
+                    return False
+
+    return True
+
+
+def _download_agera5_timeseries(year: int, area, cache_dir: str,
+                                data_format: str = "csv", cache_only: bool = False,
+                                bounds=None):
+    """Validate and publish one annual CSV under an R/Python-compatible lock."""
+    if str(data_format).lower() != "csv":
+        raise ValueError("AgERA5 time-series backend requires CSV.")
+    bounds = bounds or _date_bounds_for_year(year)
+    if bounds is None:
+        return None
+    dest = _agera5_timeseries_cache_path(cache_dir, year, area, "csv")
+    valid = lambda path: _valid_agera5_timeseries_csv(path, year, bounds, area)
+    lock = _agera5_acquire_lock(dest + ".lock")
+    if lock is None:
+        print(f"AgERA5 cache busy (including possible legacy lock): {dest}")
+        return None
+    try:
+        if valid(dest):
+            return dest
+
+        def promote(source):
+            if not valid(source):
+                return False
+            fd, stage = tempfile.mkstemp(prefix=".publish-", suffix=".csv", dir=cache_dir)
+            os.close(fd)
+            try:
+                shutil.copyfile(source, stage)
+                if not valid(stage):
+                    return False
+                if os.path.exists(dest):
+                    fd, evidence = tempfile.mkstemp(prefix=os.path.basename(dest) + ".invalid-", dir=cache_dir)
+                    os.close(fd)
+                    shutil.copyfile(dest, evidence)
+                os.replace(stage, dest)
+                return True
+            finally:
+                if os.path.exists(stage):
+                    os.remove(stage)
+
+        for candidate in (dest + ".csv", dest + ".partial.csv", dest + ".partial"):
+            if promote(candidate):
+                return dest
+        if cache_only:
+            return None
+        import cdsapi
+        req = {"variable": [v[0] for v in _AGERA5_TIMESERIES_VARS.values()],
+               "date": list(bounds), "data_format": "csv", "area": list(area)}
+        with tempfile.TemporaryDirectory(prefix=".agera5-request-", dir=cache_dir) as stage_dir:
+            stage = os.path.join(stage_dir, os.path.basename(dest))
+            err = None
+            returned = None
+            try:
+                returned = _make_cds_client(cdsapi).retrieve(_CDS_TIMESERIES_DATASET, req, stage)
+            except Exception as exc:  # client may finish transfer before raising
+                err = exc
+            candidates = [stage, stage + ".csv", stage + ".partial.csv"]
+            if isinstance(returned, str):
+                candidates.append(returned)
+            for candidate in candidates:
+                if promote(candidate):
+                    return dest
+            print(f"AgERA5 time-series download failed ({year}, area={area}): {err or 'no complete CSV returned'}")
+        return None
+    finally:
+        _agera5_release_lock(lock)
 
 
 def _find_timeseries_column(df: pd.DataFrame, expected: str) -> str:
@@ -392,6 +536,7 @@ def _process_weather_agera5_timeseries(
     agera5_cache_dir: str,
     agera5_data_format: str = "csv",
     agera5_timeseries_chunk_degrees: float = _AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
+    cache_only: bool = False,
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(agera5_cache_dir, exist_ok=True)
@@ -406,7 +551,7 @@ def _process_weather_agera5_timeseries(
 
     print(f"--- Starting AgERA5 Time-Series Download (Years: {start_year}-{end_year}) ---")
     print("  Backend: sis-agrometeorological-indicators-timeseries "
-          f"({len(chunks)} area chunk(s), format={agera5_data_format}).")
+          f"({len(chunks)} area chunk(s), format={agera5_data_format}, cache_only={cache_only}).")
 
     point_series = {pid: {v: {} for v in _AGERA5_TIMESERIES_VARS} for pid in ids}
     jobs = [(year, chunk) for year in range(start_year, end_year + 1)
@@ -422,15 +567,15 @@ def _process_weather_agera5_timeseries(
         f"using {workers} concurrent CDS request(s) (cap={_AGERA5_CDS_REQUEST_CAP})."
     )
 
+    effective_end = min(date(int(end_year), 12, 31), date.today() - timedelta(days=10))
+
     def _dl(job):
         year, chunk = job
-        return (
-            year,
-            chunk,
-            _download_agera5_timeseries(
-                year, chunk["area"], agera5_cache_dir, agera5_data_format
-            ),
-        )
+        bounds = [date(year, 1, 1).isoformat(), min(date(year, 12, 31), effective_end).isoformat()]
+        path = _download_agera5_timeseries(
+            year, chunk["area"], agera5_cache_dir, agera5_data_format,
+            cache_only=cache_only, bounds=bounds)
+        return (year, chunk, path)
 
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -451,21 +596,47 @@ def _process_weather_agera5_timeseries(
                     with open(log_file, "a") as lf:
                         lf.write(msg + "\n")
 
+    expected_start = date(int(start_year), 1, 1)
+    expected_end = effective_end
+    all_expected_codes = []
+    cur = expected_start
+    while cur <= expected_end:
+        all_expected_codes.append(f"{cur.year}{cur.timetuple().tm_yday:03d}")
+        cur += timedelta(days=1)
+
     written = 0
     for pid, lat, lon in zip(ids, lats, lons):
+        staging_file = f"{pid}.WTH.tmp-{os.getpid()}-{time.time_ns()}"
+        staging_path = os.path.join(output_dir, staging_file)
+        final_path = os.path.join(output_dir, f"{pid}.WTH")
         try:
-            series = {v: pd.Series(point_series[pid][v], dtype="float64")
-                      for v in _AGERA5_TIMESERIES_VARS}
-            if series["TMAX"].empty:
+            ps = point_series[pid]
+            if not ps["TMAX"]:
                 raise ValueError("No AgERA5 time-series data extracted for this point.")
+            missing_codes = [c for c in all_expected_codes if c not in ps["TMAX"]]
+            if missing_codes:
+                raise ValueError(
+                    f"Incomplete time series: missing {len(missing_codes)} day(s) between {expected_start} and {expected_end} "
+                    f"(first missing: {missing_codes[0]}, last missing: {missing_codes[-1]})."
+                )
+
+            series = {v: pd.Series([ps[v][d] for d in all_expected_codes], index=all_expected_codes, dtype="float64")
+                      for v in _AGERA5_TIMESERIES_VARS}
             frame = pd.DataFrame(series)
             frame.index.name = "DATE"
             frame = frame.reset_index().sort_values("DATE")
             dts = pd.to_datetime(frame["DATE"], format="%Y%j")
             frame["YEAR"] = dts.dt.year
             frame["MM"] = dts.dt.month
-            frame = frame.fillna(-99)
-            _write_wth(frame, pid, lat, lon, output_dir)
+            forcing = frame[list(_AGERA5_TIMESERIES_VARS)].to_numpy(dtype=float)
+            if (~np.isfinite(forcing) | (forcing == -99)).any():
+                raise ValueError("Incomplete required AgERA5 forcing")
+
+            if os.path.exists(staging_path):
+                os.remove(staging_path)
+
+            _write_wth(frame, pid, lat, lon, output_dir, filename=staging_file)
+            os.replace(staging_path, final_path)
             written += 1
         except Exception as exc:  # noqa: BLE001
             msg = f"\n--- ERROR ---\nAgERA5 time-series point {pid} ({lat:.3f},{lon:.3f}): {exc}\n"
@@ -473,13 +644,18 @@ def _process_weather_agera5_timeseries(
             if log_file:
                 with open(log_file, "a") as lf:
                     lf.write(msg)
+            if os.path.exists(staging_path):
+                try:
+                    os.remove(staging_path)
+                except OSError:
+                    pass
 
     print(f"\nAgERA5 time-series processing complete: {written}/{len(ids)} points "
           f"written to '{output_dir}'.\n")
 
 
 def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
-               output_dir: str) -> str:
+               output_dir: str, filename: str | None = None) -> str:
     """Write one DSSAT .WTH from a daily DataFrame.
 
     *df* must contain DATE, SRAD, TMAX, TMIN, RAIN, TDEW, RH2M, WIND. Returns
@@ -510,7 +686,9 @@ def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
         )
         line = line.replace(" -99.0", "   -99")
         lines.append(line)
-    out_path = os.path.join(output_dir, f"{pid}.WTH")
+    if filename is None:
+        filename = f"{pid}.WTH"
+    out_path = os.path.join(output_dir, filename)
     with open(out_path, "w") as fh:
         fh.write(header + "\n")
         fh.write("\n".join(lines) + "\n")
@@ -535,6 +713,7 @@ def process_weather_agera5(
     agera5_backend: str = "gridded",
     agera5_data_format: str = "csv",
     agera5_timeseries_chunk_degrees: float = _AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
+    cache_only: bool = False,
 ) -> None:
     """Download AgERA5 over the grid's bounding box and write DSSAT .WTH files.
 
@@ -558,6 +737,7 @@ def process_weather_agera5(
             agera5_cache_dir=agera5_cache_dir,
             agera5_data_format=agera5_data_format,
             agera5_timeseries_chunk_degrees=agera5_timeseries_chunk_degrees,
+            cache_only=cache_only,
         )
     if backend not in ("gridded", "grid", "classic"):
         raise ValueError("agera5_backend must be 'gridded' or 'timeseries'.")
@@ -664,7 +844,9 @@ def process_weather_agera5(
             dts = pd.to_datetime(frame["DATE"], format="%Y%j")
             frame["YEAR"] = dts.dt.year
             frame["MM"] = dts.dt.month
-            frame = frame.fillna(-99)
+            forcing = frame[list(_AGERA5_TIMESERIES_VARS)].to_numpy(dtype=float)
+            if (~np.isfinite(forcing) | (forcing == -99)).any():
+                raise ValueError("Incomplete required AgERA5 forcing")
             _write_wth(frame, pid, lat, lon, output_dir)
             written += 1
         except Exception as exc:  # noqa: BLE001

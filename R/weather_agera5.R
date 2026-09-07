@@ -226,58 +226,140 @@ AGERA5_CDS_REQUEST_CAP <- 4L
   file.path(cache_dir, sprintf("agera5_timeseries_%d_%s.%s", as.integer(year), tag, ext))
 }
 
-.agera5_download_timeseries_job <- function(job) {
-  data_format <- tolower(job$data_format)
-  if (data_format != "csv") {
-    stop("AgERA5 time-series backend currently supports data_format='csv'.", call. = FALSE)
+.agera5_acquire_lock <- function(lock_path, max_wait_sec = 120, stale_sec = NULL) {
+  # Kernel locks survive long requests and are released automatically on exit.
+  # Never unlink lock files: concurrent callers must lock the same inode.
+  if (dir.exists(lock_path)) return(NULL) # legacy directory: do not steal it
+  filelock::lock(lock_path, timeout = max_wait_sec * 1000)
+}
+
+.agera5_release_lock <- function(lock) {
+  if (!is.null(lock)) filelock::unlock(lock)
+}
+
+.agera5_validate_timeseries_csv <- function(path, expected_year = NULL, bounds = NULL, area = NULL) {
+  if (is.null(path) || !is.character(path) || !length(path) || !file.exists(path)) return(FALSE)
+  info <- file.info(path)
+  if (is.na(info$size) || info$size <= 0) return(FALSE)
+
+  df <- tryCatch(
+    utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(df) || nrow(df) == 0L) return(FALSE)
+
+  csv_cols_lower <- tolower(names(df))
+  req_vars_lower <- tolower(c(
+    "Solar_Radiation_Flux", "Temperature_Air_2m_Max_24h", "Temperature_Air_2m_Min_24h",
+    "Precipitation_Flux", "Dew_Point_Temperature_2m_Mean_24h", "Relative_Humidity_2m_15h",
+    "Wind_Speed_10m_Mean_24h"
+  ))
+  if (!all(req_vars_lower %in% csv_cols_lower)) return(FALSE)
+
+  date_col <- intersect("valid_time", csv_cols_lower)
+  if (!length(date_col)) return(FALSE)
+  lat_col <- intersect("latitude", csv_cols_lower)
+  if (!length(lat_col)) return(FALSE)
+  lon_col <- intersect("longitude", csv_cols_lower)
+  if (!length(lon_col)) return(FALSE)
+
+  date_col_name <- names(df)[which(csv_cols_lower == date_col[1])[1]]
+  lat_col_name <- names(df)[which(csv_cols_lower == lat_col[1])[1]]
+  lon_col_name <- names(df)[which(csv_cols_lower == lon_col[1])[1]]
+
+  lat <- suppressWarnings(as.numeric(df[[lat_col_name]]))
+  lon <- suppressWarnings(as.numeric(df[[lon_col_name]]))
+  if (any(!is.finite(lat) | !is.finite(lon) | abs(lat) > 90 | abs(lon) > 180)) return(FALSE)
+  if (!is.null(area) && any(lat > area[1] + 1e-6 | lat < area[3] - 1e-6 |
+                           lon < area[2] - 1e-6 | lon > area[4] + 1e-6)) return(FALSE)
+  dates <- tryCatch(as.Date(df[[date_col_name]]), error = function(e) as.Date(NA))
+  if (any(is.na(dates))) return(FALSE)
+
+  for (rv in req_vars_lower) {
+    col_name <- names(df)[which(csv_cols_lower == rv)[1]]
+    num_vals <- suppressWarnings(as.numeric(df[[col_name]]))
+    if (any(!is.finite(num_vals) | num_vals == -99)) return(FALSE)
   }
-  bounds <- .agera5_date_bounds_for_year(job$year)
+
+  if (!is.null(expected_year) && is.finite(as.numeric(expected_year))) {
+    yr <- as.integer(expected_year)
+    if (is.null(bounds)) bounds <- .agera5_date_bounds_for_year(yr)
+    if (is.null(bounds)) return(FALSE)
+    exp_start <- as.Date(bounds[1])
+    exp_end <- as.Date(bounds[2])
+    expected_days <- as.integer(exp_end - exp_start) + 1L
+
+    cell_keys <- paste(df[[lat_col_name]], df[[lon_col_name]], sep = "_")
+    cells <- unique(cell_keys)
+    for (cell in cells) {
+      idx <- which(cell_keys == cell)
+      cell_dates <- sort(dates[idx])
+      if (length(cell_dates) != expected_days) return(FALSE)
+      if (anyDuplicated(cell_dates)) return(FALSE)
+      if (cell_dates[1] != exp_start || cell_dates[length(cell_dates)] != exp_end) return(FALSE)
+      if (length(cell_dates) > 1L && any(diff(cell_dates) != 1)) return(FALSE)
+    }
+  }
+
+  TRUE
+}
+
+.agera5_download_timeseries_impl <- function(job) {
+  data_format <- tolower(job$data_format)
+  if (data_format != "csv") stop("AgERA5 time-series backend requires CSV.", call. = FALSE)
+  bounds <- job$bounds
+  if (is.null(bounds)) bounds <- .agera5_date_bounds_for_year(job$year)
   if (is.null(bounds)) return(NULL)
   dest <- .agera5_timeseries_cache_path(job$cache_dir, job$year, job$area, data_format)
-  valid_csv <- function(path) {
-    if (!file.exists(path) || file.info(path)$size <= 0) return(FALSE)
-    x <- try(utils::read.csv(path, nrows = 5, check.names = FALSE), silent = TRUE)
-    !inherits(x, "try-error") && nrow(x) > 0 &&
-      all(c("valid_time", "latitude", "longitude") %in% tolower(names(x)))
+  valid <- function(path) .agera5_validate_timeseries_csv(path, job$year, bounds, job$area)
+  lock <- .agera5_acquire_lock(paste0(dest, ".lock"))
+  if (is.null(lock)) {
+    message("AgERA5 cache busy (including possible legacy lock): ", basename(dest))
+    return(NULL)
   }
-  if (valid_csv(dest)) return(dest)
-
-  partial <- paste0(dest, ".partial")
-  if (file.exists(partial)) unlink(partial)
-  req <- list(
-    dataset_short_name = "sis-agrometeorological-indicators-timeseries",
-    variable = vapply(.agera5_timeseries_vars, `[[`, character(1), "var"),
-    date = unname(bounds),
-    data_format = data_format,
-    area = as.numeric(job$area),
-    target = basename(partial)
-  )
+  on.exit(.agera5_release_lock(lock), add = TRUE)
+  if (valid(dest)) return(dest)
+  # No mutations before acquiring ownership. Keep invalid canonical data until
+  # a verified replacement is ready; cache-only reads never delete evidence.
+  promote <- function(source) {
+    if (!valid(source)) return(FALSE)
+    stage <- tempfile(".publish-", tmpdir = dirname(dest), fileext = ".csv")
+    on.exit(unlink(stage), add = TRUE)
+    if (!file.copy(source, stage) || !valid(stage)) return(FALSE)
+    if (file.exists(dest)) {
+      evidence <- tempfile(paste0(basename(dest), ".invalid-"), tmpdir = dirname(dest))
+      if (!file.copy(dest, evidence)) stop("Cannot preserve invalid cache evidence")
+    }
+    # Same-filesystem rename; fail closed rather than copying onto a live file.
+    if (!file.rename(stage, dest)) stop("Cannot atomically publish AgERA5 CSV")
+    TRUE
+  }
+  for (candidate in c(paste0(dest, ".csv"), paste0(dest, ".partial.csv"), paste0(dest, ".partial"))) {
+    if (promote(candidate)) return(dest)
+  }
+  if (isTRUE(job$cache_only)) return(NULL)
+  .agera5_ensure_ecmwfr_key(quiet = TRUE)
+  stage_dir <- tempfile(".agera5-request-", tmpdir = job$cache_dir)
+  dir.create(stage_dir)
+  on.exit(unlink(stage_dir, recursive = TRUE), add = TRUE)
+  req <- list(dataset_short_name = "sis-agrometeorological-indicators-timeseries",
+              variable = vapply(.agera5_timeseries_vars, `[[`, character(1), "var"),
+              date = unname(bounds), data_format = data_format,
+              area = as.numeric(job$area), target = basename(dest))
   err <- NULL
-  downloaded <- tryCatch(
-    ecmwfr::wf_request(request = req, path = job$cache_dir),
-    error = function(e) {
-      err <<- conditionMessage(e)
-      NULL
-    }
-  )
-  # ecmwfr may normalize the target extension (for example, changing
-  # `file.csv.partial` to `file.csv.csv`). Prefer the path it returns instead
-  # of assuming that the requested temporary name was preserved.
-  candidates <- unique(c(partial, as.character(unlist(downloaded, use.names = FALSE))))
-  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
-  valid <- candidates[vapply(candidates, valid_csv, logical(1))]
-  if (length(valid)) {
-    source <- valid[[1]]
-    if (identical(normalizePath(source, mustWork = FALSE),
-                  normalizePath(dest, mustWork = FALSE)) || file.rename(source, dest)) {
-      return(dest)
-    }
-  }
-  message(sprintf("  AgERA5 time-series download failed (%d, area=%s): %s",
-                  job$year, paste(job$area, collapse = ","),
-                  if (is.null(err)) "no data file returned" else err))
+  returned <- tryCatch(ecmwfr::wf_request(request = req, path = stage_dir),
+                       error = function(e) { err <<- conditionMessage(e); NULL })
+  canonical_stage <- file.path(stage_dir, basename(dest))
+  candidates <- c(canonical_stage, paste0(canonical_stage, ".csv"),
+                  paste0(canonical_stage, ".partial.csv"))
+  if (is.character(returned)) candidates <- unique(c(candidates, returned[!is.na(returned)]))
+  for (candidate in candidates) if (promote(candidate)) return(dest)
+  message(sprintf("AgERA5 time-series download failed (%d): %s", job$year,
+                  if (is.null(err)) "no complete CSV returned" else err))
   NULL
 }
+
+.agera5_download_timeseries_job <- function(job) .agera5_download_timeseries_impl(job)
 
 .agera5_find_timeseries_column <- function(df, expected) {
   hit <- which(tolower(names(df)) == tolower(expected))
@@ -310,7 +392,7 @@ AGERA5_CDS_REQUEST_CAP <- 4L
   out
 }
 
-.agera5_write_wth <- function(wd, pid, lat, lon, output_dir) {
+.agera5_write_wth <- function(wd, pid, lat, lon, output_dir, filename = sprintf("%s.WTH", pid)) {
   # Provider writers serialize their source values and defer physical-quality
   # decisions to the shared engine-level is_wth_valid() gate. This keeps
   # AgERA5 consistent with the other weather adapters and preserves the raw
@@ -334,7 +416,7 @@ AGERA5_CDS_REQUEST_CAP <- 4L
                             DATE, clamp_wth(SRAD), clamp_wth(TMAX), clamp_wth(TMIN),
                             clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(WIND)))
   lines <- gsub("-99.0", "  -99", lines, fixed = TRUE)
-  out <- file.path(output_dir, sprintf("%s.WTH", pid))
+  out <- file.path(output_dir, filename)
   writeLines(c(hdr, lines), con = out)
   out
 }
@@ -342,7 +424,8 @@ AGERA5_CDS_REQUEST_CAP <- 4L
 .process_weather_agera5_timeseries <- function(shapefile, start_year, end_year, output_dir,
                                                 id_col, lat_col, lon_col, n_cores, log_file,
                                                 agera5_cache_dir, agera5_data_format = "csv",
-                                                agera5_timeseries_chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG) {
+                                                agera5_timeseries_chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
+                                                cache_only = FALSE) {
   if (tolower(agera5_data_format) != "csv") {
     stop("AgERA5 time-series backend currently supports data_format='csv'.", call. = FALSE)
   }
@@ -353,9 +436,10 @@ AGERA5_CDS_REQUEST_CAP <- 4L
   end_year <- min(as.integer(end_year), lubridate::year(Sys.Date()))
   chunks <- .agera5_split_timeseries_chunks(lats, lons, agera5_timeseries_chunk_degrees)
   message(sprintf("--- Starting AgERA5 Time-Series Download (Years: %d-%d) ---", start_year, end_year))
-  message(sprintf("  Backend: sis-agrometeorological-indicators-timeseries (%d area chunk(s), format=%s).",
-                  length(chunks), agera5_data_format))
+  message(sprintf("  Backend: sis-agrometeorological-indicators-timeseries (%d area chunk(s), format=%s, cache_only=%s).",
+                  length(chunks), agera5_data_format, cache_only))
 
+  effective_end <- min(as.Date(sprintf("%04d-12-31", end_year)), Sys.Date() - 10)
   jobs <- list()
   for (yr in seq.int(as.integer(start_year), end_year)) {
     if (is.null(.agera5_date_bounds_for_year(yr))) next
@@ -363,7 +447,9 @@ AGERA5_CDS_REQUEST_CAP <- 4L
       jobs[[length(jobs) + 1L]] <- list(year = yr, area = chunk$area,
                                        cache_dir = agera5_cache_dir,
                                        data_format = agera5_data_format,
-                                       chunk = chunk)
+                                       chunk = chunk,
+                                       cache_only = isTRUE(cache_only),
+                                       bounds = c(sprintf("%04d-01-01", yr), as.character(min(as.Date(sprintf("%04d-12-31", yr)), effective_end))))
     }
   }
   requested_cores <- suppressWarnings(as.integer(n_cores))
@@ -384,10 +470,24 @@ AGERA5_CDS_REQUEST_CAP <- 4L
         ".agera5_cds_rc_candidates", ".agera5_read_cdsapirc",
         ".dssatutils_cds_default_url", ".dssatutils_cds_rc_candidates",
         ".dssatutils_read_cdsapirc", ".dssatutils_prompt_secret",
-        "setup_cds_credentials", ".dssatutils_ensure_cds_credentials"),
+        "setup_cds_credentials", ".dssatutils_ensure_cds_credentials",
+        ".agera5_download_timeseries_impl", ".agera5_validate_timeseries_csv", ".agera5_acquire_lock",
+        ".agera5_release_lock"),
       envir = parent.env(environment())
     )
-    parallel::clusterEvalQ(cl, { library(ecmwfr); NULL })
+    parallel::clusterEvalQ(cl, {
+      # Exported closures must resolve these helpers from the worker, not a
+      # potentially older installed namespace (e.g. during pkgload development).
+      for (name in c(".agera5_download_timeseries_job", ".agera5_download_timeseries_impl",
+                     ".agera5_validate_timeseries_csv", ".agera5_timeseries_cache_path",
+                     ".agera5_date_bounds_for_year", ".agera5_acquire_lock", ".agera5_release_lock")) {
+        fun <- get(name, envir = .GlobalEnv)
+        environment(fun) <- .GlobalEnv
+        assign(name, fun, envir = .GlobalEnv)
+      }
+      library(ecmwfr)
+      NULL
+    })
     paths <- parallel::parLapply(cl, jobs, .agera5_download_timeseries_job)
   } else {
     paths <- lapply(jobs, .agera5_download_timeseries_job)
@@ -421,12 +521,29 @@ AGERA5_CDS_REQUEST_CAP <- 4L
     })
   }
 
+  expected_start <- as.Date(sprintf("%04d-01-01", as.integer(start_year)))
+  expected_end <- effective_end
+  all_expected_dates <- seq.Date(expected_start, expected_end, by = "day")
+  all_expected_codes <- sprintf("%d%03d", lubridate::year(all_expected_dates), lubridate::yday(all_expected_dates))
+
   written <- 0L
   for (i in seq_along(ids)) {
+    pid <- ids[i]
     tryCatch({
-      ps <- point_series[[ids[i]]]
-      if (!length(ps$TMAX)) stop("No AgERA5 time-series data extracted for this point.")
-      dates <- sort(unique(unlist(lapply(ps, names), use.names = FALSE)))
+      ps <- point_series[[pid]]
+      if (is.null(ps) || !length(ps$TMAX)) {
+        stop("No AgERA5 time-series data extracted for point.")
+      }
+      extracted_dates <- names(ps$TMAX)
+      missing_dates <- setdiff(all_expected_codes, extracted_dates)
+      if (length(missing_dates) > 0L) {
+        stop(sprintf(
+          "Incomplete time series: missing %d day(s) between %s and %s (first missing: %s, last missing: %s).",
+          length(missing_dates), as.character(expected_start), as.character(expected_end),
+          missing_dates[1], missing_dates[length(missing_dates)]
+        ))
+      }
+      dates <- all_expected_codes
       get_values <- function(vname) {
         values <- ps[[vname]]
         values <- values[!duplicated(names(values), fromLast = TRUE)]
@@ -435,14 +552,29 @@ AGERA5_CDS_REQUEST_CAP <- 4L
       wd <- data.frame(DATE = dates, SRAD = get_values("SRAD"), TMAX = get_values("TMAX"),
                        TMIN = get_values("TMIN"), RAIN = get_values("RAIN"), TDEW = get_values("TDEW"),
                        RH2M = get_values("RH2M"), WIND = get_values("WIND"))
+      forcing <- as.matrix(wd[, names(.agera5_timeseries_vars), drop = FALSE])
+      if (any(!is.finite(forcing) | forcing == -99)) stop("Incomplete required AgERA5 forcing")
       parsed <- as.Date(wd$DATE, format = "%Y%j")
       wd$YEAR <- lubridate::year(parsed); wd$MM <- lubridate::month(parsed)
-      .agera5_write_wth(wd, ids[i], lats[i], lons[i], output_dir)
+
+      staging_file <- basename(tempfile(paste0(pid, ".WTH.tmp-"), tmpdir = output_dir))
+      staging_path <- file.path(output_dir, staging_file)
+      final_path <- file.path(output_dir, sprintf("%s.WTH", pid))
+      if (file.exists(staging_path)) unlink(staging_path)
+
+      .agera5_write_wth(wd, pid, lats[i], lons[i], output_dir, filename = staging_file)
+
+      if (!file.rename(staging_path, final_path)) {
+        unlink(staging_path)
+        stop("Failed to atomically publish weather file.")
+      }
       written <- written + 1L
     }, error = function(e) {
-      msg <- sprintf("\n--- ERROR ---\nAgERA5 time-series point %s: %s\n", ids[i], conditionMessage(e))
+      msg <- sprintf("\n--- ERROR ---\nAgERA5 time-series point %s (%0.3f,%0.3f): %s\n",
+                     ids[i], lats[i], lons[i], conditionMessage(e))
       cat(msg)
       if (!is.null(log_file)) write(msg, file = log_file, append = TRUE)
+      if (exists("staging_path") && file.exists(staging_path)) unlink(staging_path)
     })
   }
   message(sprintf("\nAgERA5 time-series processing complete: %d/%d points written to '%s'.\n",
@@ -454,21 +586,23 @@ process_weather_agera5 <- function(shapefile, start_year, end_year, output_dir,
                                    id_col, lat_col, lon_col, n_cores, log_file,
                                    agera5_cache_dir, agera5_backend = "gridded",
                                    agera5_data_format = "csv",
-                                   agera5_timeseries_chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG) {
+                                   agera5_timeseries_chunk_degrees = AGERA5_TIMESERIES_DEFAULT_CHUNK_DEG,
+                                   cache_only = FALSE) {
   backend <- gsub("-", "_", tolower(if (is.null(agera5_backend)) "gridded" else agera5_backend), fixed = TRUE)
   if (!backend %in% c("gridded", "grid", "classic", "timeseries", "time_series", "ts")) {
     stop("agera5_backend must be 'gridded' or 'timeseries'.", call. = FALSE)
   }
   if (!requireNamespace("ecmwfr", quietly = TRUE))
     stop("AgERA5 needs the 'ecmwfr' package + a Copernicus CDS key. install.packages('ecmwfr')")
-  .agera5_ensure_ecmwfr_key()
+  if (!isTRUE(cache_only)) .agera5_ensure_ecmwfr_key()
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
   if (!dir.exists(agera5_cache_dir)) dir.create(agera5_cache_dir, recursive = TRUE)
   if (backend %in% c("timeseries", "time_series", "ts")) {
     return(.process_weather_agera5_timeseries(
       shapefile, start_year, end_year, output_dir, id_col, lat_col, lon_col,
       n_cores, log_file, agera5_cache_dir, agera5_data_format,
-      agera5_timeseries_chunk_degrees
+      agera5_timeseries_chunk_degrees,
+      cache_only = cache_only
     ))
   }
 

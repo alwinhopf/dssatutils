@@ -350,6 +350,8 @@ def repair_weather_file_temperature_inversions(
     window_days: int = 2,
     log_file: str | Path | None = None,
     dry_run: bool = False,
+    method: str = "neighbor",
+    max_inversion_c: float = 2.0,
 ) -> pd.DataFrame:
     """Repair short Tmax/Tmin inversion runs in one DSSAT weather file.
 
@@ -357,18 +359,25 @@ def repair_weather_file_temperature_inversions(
     only when the contiguous inversion run is no longer than ``max_gap_days`` and
     the full ``window_days`` before and after the run has valid, non-inverted
     temperatures. ``TMAX`` and ``TMIN`` are replaced independently using the mean
-    of their respective neighboring values.
+    of their respective neighboring values (when method='neighbor'), or swapped
+    in place if the inversion does not exceed max_inversion_c (when method='swap').
     """
 
     path = Path(wth_file)
     if not path.exists():
         raise FileNotFoundError(f"Weather file not found: {path}")
+    method = str(method or "neighbor").lower()
+    if method not in ("neighbor", "swap"):
+        raise ValueError(f"Unknown inversion repair method: {method!r}")
     max_gap_days = int(max_gap_days)
     window_days = int(window_days)
+    max_inversion_c = float(max_inversion_c)  # /* VERIFY: study-specific inversion threshold */
     if max_gap_days < 1:
         raise ValueError("max_gap_days must be >= 1")
     if window_days < 1:
         raise ValueError("window_days must be >= 1")
+    if max_inversion_c <= 0:
+        raise ValueError("max_inversion_c must be positive")
 
     lines = path.read_text(encoding="utf-8").splitlines()
     header_idx = _find_header(lines)
@@ -417,50 +426,79 @@ def repair_weather_file_temperature_inversions(
     unrepaired_count = 0
     repaired_runs = 0
 
-    for start, end, length in _missing_runs(inversion):
-        if length <= max_gap_days:
-            neighbor_idx = list(range(start - window_days, start)) + list(range(end + 1, end + 1 + window_days))
-            in_bounds = all(0 <= i < len(original) for i in neighbor_idx)
-            neighbor_tmax = tmax[neighbor_idx] if in_bounds else np.array([])
-            neighbor_tmin = tmin[neighbor_idx] if in_bounds else np.array([])
-            usable = (
-                in_bounds
-                and len(neighbor_tmax) == 2 * window_days
-                and np.all(np.isfinite(neighbor_tmax))
-                and np.all(np.isfinite(neighbor_tmin))
-                and np.all(neighbor_tmin <= neighbor_tmax)
-            )
-            if usable:
-                fill_tmax = float(np.mean(neighbor_tmax))
-                fill_tmin = float(np.mean(neighbor_tmin))
-                dat.loc[start:end, "TMAX"] = fill_tmax
-                dat.loc[start:end, "TMIN"] = fill_tmin
-                repaired_count += length
+    if method == "swap":
+        for start, end, length in _missing_runs(inversion):
+            run_repaired = 0
+            for idx in range(start, end + 1):
+                raw_tmax = float(original.loc[idx, "TMAX"])
+                raw_tmin = float(original.loc[idx, "TMIN"])
+                diff_t = raw_tmin - raw_tmax
+                if diff_t <= max_inversion_c:
+                    dat.loc[idx, "TMAX"] = raw_tmin
+                    dat.loc[idx, "TMIN"] = raw_tmax
+                    repaired_count += 1
+                    run_repaired += 1
+                    log_lines.append(
+                        f"{_timestamp()} file={path.name} id={pid} issue=TMIN_GT_TMAX status=repaired "
+                        f"dates={_date_label(dat.loc[idx, 'DATE'])} gap_days=1 raw_TMAX={raw_tmax:.4f} "
+                        f"raw_TMIN={raw_tmin:.4f} fill_TMAX={raw_tmin:.4f} fill_TMIN={raw_tmax:.4f} "
+                        f"magnitude={diff_t:.4f} method=swap max_inversion_c={max_inversion_c:.2f}"
+                    )
+                else:
+                    unrepaired_count += 1
+                    log_lines.append(
+                        f"{_timestamp()} file={path.name} id={pid} issue=TMIN_GT_TMAX status=unrepaired "
+                        f"dates={_date_label(dat.loc[idx, 'DATE'])} gap_days=1 raw_TMAX={raw_tmax:.4f} "
+                        f"raw_TMIN={raw_tmin:.4f} magnitude={diff_t:.4f} "
+                        f"reason=inversion_exceeds_max_{max_inversion_c:.2f}_C"
+                    )
+            if run_repaired > 0:
                 repaired_runs += 1
-                log_lines.append(
-                    f"{_timestamp()} file={path.name} id={pid} issue=TMIN_GT_TMAX status=repaired "
-                    f"dates={_date_label(dat.loc[start, 'DATE'])}..{_date_label(dat.loc[end, 'DATE'])} "
-                    f"gap_days={length} fill_TMAX={fill_tmax:.4f} fill_TMIN={fill_tmin:.4f} "
-                    f"method=mean_{window_days}_days_before_after "
-                    f"neighbor_dates={_date_label(dat.loc[neighbor_idx[0], 'DATE'])}.."
-                    f"{_date_label(dat.loc[neighbor_idx[window_days - 1], 'DATE'])};"
-                    f"{_date_label(dat.loc[neighbor_idx[window_days], 'DATE'])}.."
-                    f"{_date_label(dat.loc[neighbor_idx[-1], 'DATE'])}"
+    else:
+        for start, end, length in _missing_runs(inversion):
+            if length <= max_gap_days:
+                neighbor_idx = list(range(start - window_days, start)) + list(range(end + 1, end + 1 + window_days))
+                in_bounds = all(0 <= i < len(original) for i in neighbor_idx)
+                neighbor_tmax = tmax[neighbor_idx] if in_bounds else np.array([])
+                neighbor_tmin = tmin[neighbor_idx] if in_bounds else np.array([])
+                usable = (
+                    in_bounds
+                    and len(neighbor_tmax) == 2 * window_days
+                    and np.all(np.isfinite(neighbor_tmax))
+                    and np.all(np.isfinite(neighbor_tmin))
+                    and np.all(neighbor_tmin <= neighbor_tmax)
                 )
+                if usable:
+                    fill_tmax = float(np.mean(neighbor_tmax))
+                    fill_tmin = float(np.mean(neighbor_tmin))
+                    dat.loc[start:end, "TMAX"] = fill_tmax
+                    dat.loc[start:end, "TMIN"] = fill_tmin
+                    repaired_count += length
+                    repaired_runs += 1
+                    log_lines.append(
+                        f"{_timestamp()} file={path.name} id={pid} issue=TMIN_GT_TMAX status=repaired "
+                        f"dates={_date_label(dat.loc[start, 'DATE'])}..{_date_label(dat.loc[end, 'DATE'])} "
+                        f"gap_days={length} fill_TMAX={fill_tmax:.4f} fill_TMIN={fill_tmin:.4f} "
+                        f"method=mean_{window_days}_days_before_after "
+                        f"neighbor_dates={_date_label(dat.loc[neighbor_idx[0], 'DATE'])}.."
+                        f"{_date_label(dat.loc[neighbor_idx[window_days - 1], 'DATE'])};"
+                        f"{_date_label(dat.loc[neighbor_idx[window_days], 'DATE'])}.."
+                        f"{_date_label(dat.loc[neighbor_idx[-1], 'DATE'])}"
+                    )
+                else:
+                    unrepaired_count += length
+                    log_lines.append(
+                        f"{_timestamp()} file={path.name} id={pid} issue=TMIN_GT_TMAX status=unrepaired "
+                        f"dates={_date_label(dat.loc[start, 'DATE'])}..{_date_label(dat.loc[end, 'DATE'])} "
+                        f"gap_days={length} reason=insufficient_{window_days}_day_valid_temperature_neighbors"
+                    )
             else:
                 unrepaired_count += length
                 log_lines.append(
                     f"{_timestamp()} file={path.name} id={pid} issue=TMIN_GT_TMAX status=unrepaired "
                     f"dates={_date_label(dat.loc[start, 'DATE'])}..{_date_label(dat.loc[end, 'DATE'])} "
-                    f"gap_days={length} reason=insufficient_{window_days}_day_valid_temperature_neighbors"
+                    f"gap_days={length} reason=gap_exceeds_max_{max_gap_days}_days"
                 )
-        else:
-            unrepaired_count += length
-            log_lines.append(
-                f"{_timestamp()} file={path.name} id={pid} issue=TMIN_GT_TMAX status=unrepaired "
-                f"dates={_date_label(dat.loc[start, 'DATE'])}..{_date_label(dat.loc[end, 'DATE'])} "
-                f"gap_days={length} reason=gap_exceeds_max_{max_gap_days}_days"
-            )
 
     _append_log(log_file, log_lines)
 
@@ -502,6 +540,8 @@ def repair_weather_temperature_inversions(
     window_days: int = 2,
     log_file: str | Path | None = None,
     dry_run: bool = False,
+    method: str = "neighbor",
+    max_inversion_c: float = 2.0,
 ) -> pd.DataFrame:
     """Repair short Tmax/Tmin inversion runs in DSSAT weather files."""
 
@@ -526,8 +566,8 @@ def repair_weather_temperature_inversions(
     _append_log(log_file, [
         "",
         f"{_timestamp()} weather_dir={weather_dir} issue=TMIN_GT_TMAX status=started "
-        f"files={len(files)} max_gap_days={int(max_gap_days)} "
-        f"window_days={int(window_days)} dry_run={dry_run}",
+        f"files={len(files)} method={method} max_inversion_c={float(max_inversion_c):.2f} "
+        f"max_gap_days={int(max_gap_days)} window_days={int(window_days)} dry_run={dry_run}",
     ])
 
     parts = [
@@ -537,6 +577,8 @@ def repair_weather_temperature_inversions(
             window_days=window_days,
             log_file=log_file,
             dry_run=dry_run,
+            method=method,
+            max_inversion_c=max_inversion_c,
         )
         for f in files
     ]

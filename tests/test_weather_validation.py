@@ -25,7 +25,7 @@ def test_fixed_width_adjacent_negative_values_are_valid(tmp_path):
         f"{'2024002':>7}{13.0:6.1f}{-9.0:6.1f}{-11.0:6.1f}{0.0:6.1f}{-14.0:6.1f}{42.0:6.1f}{3.2:6.1f}",
     ]
     _write_sample(path, rows)
-    assert is_wth_valid(path, end_year=2024)
+    assert is_wth_valid(path, end_date="2024-01-02")
 
 
 def test_weather_validator_rejects_date_gaps(tmp_path):
@@ -34,7 +34,7 @@ def test_weather_validator_rejects_date_gaps(tmp_path):
         "2024001 12.0 10.0 1.0 0.0 0.0 40.0 3.0",
         "2024003 12.0 10.0 1.0 0.0 0.0 40.0 3.0",
     ])
-    assert not is_wth_valid(path, end_year=2024)
+    assert not is_wth_valid(path, end_date="2024-01-02")
 
 
 def test_weather_validator_rejects_absolute_zero_temperature(tmp_path):
@@ -51,9 +51,9 @@ def test_weather_validator_can_require_complete_core_forcing(tmp_path):
         "2024001 -99 10.0 1.0 0.0 0.0 40.0 -99",
         "2024002 12.0 10.0 1.0 0.0 0.0 40.0 -99",
     ])
-    assert is_wth_valid(path, end_year=2024)
+    assert is_wth_valid(path, end_date="2024-01-02")
     assert not is_wth_valid(
-        path, end_year=2024, required_columns=("SRAD", "TMAX", "TMIN", "RAIN")
+        path, end_date="2024-01-02", required_columns=("SRAD", "TMAX", "TMIN", "RAIN")
     )
 
 
@@ -66,8 +66,8 @@ def test_weather_validator_can_require_all_agera5_forcing(tmp_path):
     core = ("SRAD", "TMAX", "TMIN", "RAIN")
     agera5 = core + ("TDEW", "RH2M", "WIND")
 
-    assert is_wth_valid(path, end_year=2024, required_columns=core)
-    assert not is_wth_valid(path, end_year=2024, required_columns=agera5)
+    assert is_wth_valid(path, end_date="2024-01-02", required_columns=core)
+    assert not is_wth_valid(path, end_date="2024-01-02", required_columns=agera5)
 
 
 def test_agera5_writer_defers_physical_validation_to_shared_validator(tmp_path):

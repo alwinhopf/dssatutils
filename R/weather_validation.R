@@ -33,12 +33,14 @@
 #' Validate a DSSAT weather file
 #'
 #' Accepts the DSSAT fixed-width daily layout as well as whitespace-delimited
-#' rows. Dates must be unique, consecutive, and reach `end_year` when supplied.
+#' rows. Dates must be unique and consecutive. Year bounds require January 1
+#' through December 31; explicit `start_date` / `end_date` override those bounds.
 #' Set `required_columns` to reject DSSAT `-99` missing markers in forcing
 #' variables that a particular model configuration requires.
 #'
 #' @export
-is_wth_valid <- function(path, end_year = NULL, required_columns = NULL) {
+is_wth_valid <- function(path, end_year = NULL, required_columns = NULL, start_year = NULL,
+                         start_date = NULL, end_date = NULL) {
   if (!file.exists(path) || is.na(file.info(path)$size) || file.info(path)$size <= 0) return(FALSE)
   tryCatch({
     lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
@@ -68,8 +70,16 @@ is_wth_valid <- function(path, end_year = NULL, required_columns = NULL) {
     dates <- as.Date(vapply(parsed, function(x) as.character(.wth_code_to_date(x$code)), character(1)))
     if (any(is.na(dates)) || anyDuplicated(dates) ||
         (length(dates) > 1L && any(diff(dates) != 1))) return(FALSE)
-    if (!is.null(end_year) && is.finite(as.numeric(end_year)) &&
-        as.integer(format(tail(dates, 1L), "%Y")) < as.integer(end_year)) return(FALSE)
+    requested_start <- if (!is.null(start_date)) as.Date(start_date) else if (!is.null(start_year)) {
+      as.Date(sprintf("%04d-01-01", as.integer(start_year)))
+    } else NULL
+    requested_end <- if (!is.null(end_date)) as.Date(end_date) else if (!is.null(end_year)) {
+      as.Date(sprintf("%04d-12-31", as.integer(end_year)))
+    } else NULL
+    if (anyNA(c(requested_start, requested_end))) return(FALSE)
+    if (!is.null(requested_start) && !is.null(requested_end) && requested_start > requested_end) return(FALSE)
+    if (!is.null(requested_start) && dates[1L] > requested_start) return(FALSE)
+    if (!is.null(requested_end) && tail(dates, 1L) < requested_end) return(FALSE)
     TRUE
   }, error = function(e) FALSE)
 }

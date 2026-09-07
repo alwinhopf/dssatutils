@@ -319,13 +319,18 @@ repair_weather_file_temperature_inversions <- function(wth_file,
                                                        max_gap_days = 3L,
                                                        window_days = 2L,
                                                        log_file = NULL,
-                                                       dry_run = FALSE) {
+                                                       dry_run = FALSE,
+                                                       method = c("neighbor", "swap"),
+                                                       max_inversion_c = 2.0) {
   stopifnot(length(wth_file) == 1L)
   if (!file.exists(wth_file)) stop(sprintf("Weather file not found: %s", wth_file), call. = FALSE)
+  method <- match.arg(method)
   max_gap_days <- as.integer(max_gap_days)
   window_days <- as.integer(window_days)
+  max_inversion_c <- as.numeric(max_inversion_c) # /* VERIFY: study-specific inversion threshold */
   if (is.na(max_gap_days) || max_gap_days < 1L) stop("max_gap_days must be >= 1", call. = FALSE)
   if (is.na(window_days) || window_days < 1L) stop("window_days must be >= 1", call. = FALSE)
+  if (is.na(max_inversion_c) || max_inversion_c <= 0) stop("max_inversion_c must be positive", call. = FALSE)
 
   lines <- readLines(wth_file, warn = FALSE)
   header_idx <- .weather_repair_find_header(lines)
@@ -371,51 +376,84 @@ repair_weather_file_temperature_inversions <- function(wth_file,
   repaired_runs <- 0L
 
   if (nrow(runs)) {
-    for (rr in seq_len(nrow(runs))) {
-      s <- runs$start[rr]; e <- runs$end[rr]; len <- runs$length[rr]
-      if (len <= max_gap_days) {
-        neighbor_idx <- c((s - window_days):(s - 1L), (e + 1L):(e + window_days))
-        in_bounds <- all(neighbor_idx >= 1L & neighbor_idx <= nrow(original))
-        neighbor_tmax <- if (in_bounds) original$TMAX[neighbor_idx] else numeric()
-        neighbor_tmin <- if (in_bounds) original$TMIN[neighbor_idx] else numeric()
-        neighbor_ok <- in_bounds &&
-          all(is.finite(neighbor_tmax)) && all(is.finite(neighbor_tmin)) &&
-          !any(is.na(neighbor_tmax)) && !any(is.na(neighbor_tmin)) &&
-          all(neighbor_tmin <= neighbor_tmax)
-        if (neighbor_ok) {
-          fill_tmax <- mean(neighbor_tmax)
-          fill_tmin <- mean(neighbor_tmin)
-          dat$TMAX[s:e] <- fill_tmax
-          dat$TMIN[s:e] <- fill_tmin
-          repaired_count <- repaired_count + len
-          repaired_runs <- repaired_runs + 1L
-          log_lines <- c(log_lines, sprintf(
-            "%s file=%s id=%s issue=TMIN_GT_TMAX status=repaired dates=%s..%s gap_days=%d fill_TMAX=%.4f fill_TMIN=%.4f method=mean_%d_days_before_after neighbor_dates=%s..%s;%s..%s",
-            format(Sys.time(), "%Y-%m-%d %H:%M:%S"), basename(wth_file), id,
-            .weather_repair_date_label(dat$DATE[s]), .weather_repair_date_label(dat$DATE[e]),
-            len, fill_tmax, fill_tmin, window_days,
-            .weather_repair_date_label(dat$DATE[neighbor_idx[1]]),
-            .weather_repair_date_label(dat$DATE[neighbor_idx[window_days]]),
-            .weather_repair_date_label(dat$DATE[neighbor_idx[window_days + 1L]]),
-            .weather_repair_date_label(dat$DATE[neighbor_idx[length(neighbor_idx)]])
-          ))
+    if (method == "swap") {
+      for (rr in seq_len(nrow(runs))) {
+        s <- runs$start[rr]; e <- runs$end[rr]
+        run_repaired <- 0L
+        for (idx in s:e) {
+          raw_tmax <- original$TMAX[idx]
+          raw_tmin <- original$TMIN[idx]
+          diff_t <- raw_tmin - raw_tmax
+          if (diff_t <= max_inversion_c) {
+            dat$TMAX[idx] <- raw_tmin
+            dat$TMIN[idx] <- raw_tmax
+            repaired_count <- repaired_count + 1L
+            run_repaired <- run_repaired + 1L
+            log_lines <- c(log_lines, sprintf(
+              "%s file=%s id=%s issue=TMIN_GT_TMAX status=repaired dates=%s gap_days=1 raw_TMAX=%.4f raw_TMIN=%.4f fill_TMAX=%.4f fill_TMIN=%.4f magnitude=%.4f method=swap max_inversion_c=%.2f",
+              format(Sys.time(), "%Y-%m-%d %H:%M:%S"), basename(wth_file), id,
+              .weather_repair_date_label(dat$DATE[idx]),
+              raw_tmax, raw_tmin, raw_tmin, raw_tmax, diff_t, max_inversion_c
+            ))
+          } else {
+            unrepaired_count <- unrepaired_count + 1L
+            log_lines <- c(log_lines, sprintf(
+              "%s file=%s id=%s issue=TMIN_GT_TMAX status=unrepaired dates=%s gap_days=1 raw_TMAX=%.4f raw_TMIN=%.4f magnitude=%.4f reason=inversion_exceeds_max_%.2f_C",
+              format(Sys.time(), "%Y-%m-%d %H:%M:%S"), basename(wth_file), id,
+              .weather_repair_date_label(dat$DATE[idx]),
+              raw_tmax, raw_tmin, diff_t, max_inversion_c
+            ))
+          }
+        }
+        if (run_repaired > 0L) repaired_runs <- repaired_runs + 1L
+      }
+    } else {
+      for (rr in seq_len(nrow(runs))) {
+        s <- runs$start[rr]; e <- runs$end[rr]; len <- runs$length[rr]
+        if (len <= max_gap_days) {
+          neighbor_idx <- c((s - window_days):(s - 1L), (e + 1L):(e + window_days))
+          in_bounds <- all(neighbor_idx >= 1L & neighbor_idx <= nrow(original))
+          neighbor_tmax <- if (in_bounds) original$TMAX[neighbor_idx] else numeric()
+          neighbor_tmin <- if (in_bounds) original$TMIN[neighbor_idx] else numeric()
+          neighbor_ok <- in_bounds &&
+            all(is.finite(neighbor_tmax)) && all(is.finite(neighbor_tmin)) &&
+            !any(is.na(neighbor_tmax)) && !any(is.na(neighbor_tmin)) &&
+            all(neighbor_tmin <= neighbor_tmax)
+          if (neighbor_ok) {
+            fill_tmax <- mean(neighbor_tmax)
+            fill_tmin <- mean(neighbor_tmin)
+            dat$TMAX[s:e] <- fill_tmax
+            dat$TMIN[s:e] <- fill_tmin
+            repaired_count <- repaired_count + len
+            repaired_runs <- repaired_runs + 1L
+            log_lines <- c(log_lines, sprintf(
+              "%s file=%s id=%s issue=TMIN_GT_TMAX status=repaired dates=%s..%s gap_days=%d fill_TMAX=%.4f fill_TMIN=%.4f method=mean_%d_days_before_after neighbor_dates=%s..%s;%s..%s",
+              format(Sys.time(), "%Y-%m-%d %H:%M:%S"), basename(wth_file), id,
+              .weather_repair_date_label(dat$DATE[s]), .weather_repair_date_label(dat$DATE[e]),
+              len, fill_tmax, fill_tmin, window_days,
+              .weather_repair_date_label(dat$DATE[neighbor_idx[1]]),
+              .weather_repair_date_label(dat$DATE[neighbor_idx[window_days]]),
+              .weather_repair_date_label(dat$DATE[neighbor_idx[window_days + 1L]]),
+              .weather_repair_date_label(dat$DATE[neighbor_idx[length(neighbor_idx)]])
+            ))
+          } else {
+            unrepaired_count <- unrepaired_count + len
+            log_lines <- c(log_lines, sprintf(
+              "%s file=%s id=%s issue=TMIN_GT_TMAX status=unrepaired dates=%s..%s gap_days=%d reason=insufficient_%d_day_valid_temperature_neighbors",
+              format(Sys.time(), "%Y-%m-%d %H:%M:%S"), basename(wth_file), id,
+              .weather_repair_date_label(dat$DATE[s]), .weather_repair_date_label(dat$DATE[e]),
+              len, window_days
+            ))
+          }
         } else {
           unrepaired_count <- unrepaired_count + len
           log_lines <- c(log_lines, sprintf(
-            "%s file=%s id=%s issue=TMIN_GT_TMAX status=unrepaired dates=%s..%s gap_days=%d reason=insufficient_%d_day_valid_temperature_neighbors",
+            "%s file=%s id=%s issue=TMIN_GT_TMAX status=unrepaired dates=%s..%s gap_days=%d reason=gap_exceeds_max_%d_days",
             format(Sys.time(), "%Y-%m-%d %H:%M:%S"), basename(wth_file), id,
             .weather_repair_date_label(dat$DATE[s]), .weather_repair_date_label(dat$DATE[e]),
-            len, window_days
+            len, max_gap_days
           ))
         }
-      } else {
-        unrepaired_count <- unrepaired_count + len
-        log_lines <- c(log_lines, sprintf(
-          "%s file=%s id=%s issue=TMIN_GT_TMAX status=unrepaired dates=%s..%s gap_days=%d reason=gap_exceeds_max_%d_days",
-          format(Sys.time(), "%Y-%m-%d %H:%M:%S"), basename(wth_file), id,
-          .weather_repair_date_label(dat$DATE[s]), .weather_repair_date_label(dat$DATE[e]),
-          len, max_gap_days
-        ))
       }
     }
   }
@@ -459,8 +497,11 @@ repair_weather_temperature_inversions <- function(weather_dir,
                                                   max_gap_days = 3L,
                                                   window_days = 2L,
                                                   log_file = file.path(weather_dir, "weather_repair.log"),
-                                                  dry_run = FALSE) {
+                                                  dry_run = FALSE,
+                                                  method = c("neighbor", "swap"),
+                                                  max_inversion_c = 2.0) {
   if (!dir.exists(weather_dir)) stop(sprintf("Weather directory not found: %s", weather_dir), call. = FALSE)
+  method <- match.arg(method)
   files <- list.files(weather_dir, pattern = "\\.WTH$", full.names = TRUE)
   if (!is.null(ids) && length(ids)) {
     wanted <- sprintf("%s.WTH", as.character(ids))
@@ -477,16 +518,18 @@ repair_weather_temperature_inversions <- function(weather_dir,
   }
 
   header <- sprintf(
-    "%s weather_dir=%s issue=TMIN_GT_TMAX status=started files=%d max_gap_days=%d window_days=%d dry_run=%s",
+    "%s weather_dir=%s issue=TMIN_GT_TMAX status=started files=%d method=%s max_inversion_c=%.2f max_gap_days=%d window_days=%d dry_run=%s",
     format(Sys.time(), "%Y-%m-%d %H:%M:%S"), weather_dir, length(files),
-    as.integer(max_gap_days), as.integer(window_days), dry_run)
+    method, as.numeric(max_inversion_c), as.integer(max_gap_days), as.integer(window_days), dry_run)
   .weather_repair_log_lines(log_file, c("", header))
 
   out <- lapply(files, repair_weather_file_temperature_inversions,
                 max_gap_days = max_gap_days,
                 window_days = window_days,
                 log_file = log_file,
-                dry_run = dry_run)
+                dry_run = dry_run,
+                method = method,
+                max_inversion_c = max_inversion_c)
   summary <- do.call(rbind, out)
   footer <- sprintf(
     "%s weather_dir=%s issue=TMIN_GT_TMAX status=finished repaired_values=%d unrepaired_values=%d log_file=%s",

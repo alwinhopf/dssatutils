@@ -587,11 +587,11 @@ build_dssat_profile_from_component <- function(component_row, horizon_tbl, point
       # below keeps a usable plant-available-water gap above the floored LL: a
       # gap of only ~0.005-0.014 still drives DSSAT's water balance to a
       # divide-by-(DUL-LL) singularity (SIGFPE mid-season), so enforce >= 0.04.
-      SLLL = pmax(clip01(coalesce_num(SLLL_raw, ifelse(bedrock, NA_real_, SLLL_ptf))), 0.02),
+      SLLL = pmax(clip01(coalesce_num(SLLL_raw, ifelse(bedrock, NA_real_, SLLL_ptf))), 0.02, na.rm = TRUE),
       SDUL = clip01(coalesce_num(SDUL_raw, ifelse(bedrock, NA_real_, SDUL_ptf))),
       SSAT = clip01(coalesce_num(SSAT_raw, ifelse(bedrock, NA_real_, SSAT_ptf))),
-      SDUL = pmax(SDUL, SLLL + 0.04),
-      SSAT = pmax(SSAT, SDUL + 0.01),
+      SDUL = ifelse(is.na(SDUL), SLLL + 0.04, pmax(SDUL, SLLL + 0.04, na.rm = TRUE)),
+      SSAT = ifelse(is.na(SSAT), SDUL + 0.01, pmax(SSAT, SDUL + 0.01, na.rm = TRUE)),
       SLCF = ifelse(bedrock & is.na(fragvol_raw), 99, coalesce_num(fragvol_raw, 0)),
       SRGF = ifelse(bedrock, pmax(0.01, 1 - SLCF / 100), 1.0),
       SSKS = ifelse(
@@ -691,13 +691,13 @@ build_dssat_profile_from_component <- function(component_row, horizon_tbl, point
 
 # ---- DSSAT writing -----------------------------------------------------------
 format_dssat_decimal <- function(x, digits = 3, width = 5) {
-  if (is.na(x)) return(sprintf(paste0("%", width, "s"), "-99"))
+  if (is.na(x) || x == -99) return(sprintf(paste0("%", width, "s"), "-99"))
   out <- sprintf(paste0("%", width, ".", digits, "f"), x)
   sub("^0", " ", out)
 }
 
 format_dssat_numeric <- function(x, width = 5, digits = 1) {
-  if (is.na(x)) return(sprintf(paste0("%", width, "s"), "-99"))
+  if (is.na(x) || x == -99) return(sprintf(paste0("%", width, "s"), "-99"))
   sprintf(paste0("%", width, ".", digits, "f"), x)
 }
 
@@ -709,10 +709,11 @@ write_dssat_soil_file <- function(profile, output_dir) {
   writeLines("*SOILS: USA SSURGO Soil Profiles", con)
   writeLines("! Generated from SSURGO database using full-profile logic", con)
   writeLines("", con)
-  writeLines(sprintf("*%-10s SSURGO        %9.3f %9.3f",
-                     substr(profile$profile_id, 1, 10), profile$latitude, profile$longitude), con)
+  writeLines(sprintf("*%-10s  %-11s %-5s %5.0f %s",
+                     substr(profile$profile_id, 1, 10), "SSURGO", "-99",
+                     max(profile$layers$SLB), "SSURGO Alderman profile"), con)
   writeLines("@SITE        COUNTRY          LAT     LONG SCS FAMILY", con)
-  writeLines(sprintf(" %-11s %-10s %9.3f %9.3f %s",
+  writeLines(sprintf(" %-11s %-11s %8.3f %8.3f %s",
                      substr(profile$site, 1, 11), profile$country,
                      profile$latitude, profile$longitude,
                      substr(profile$scs_family, 1, 20)), con)
@@ -726,14 +727,14 @@ write_dssat_soil_file <- function(profile, output_dir) {
   for (i in seq_len(nrow(profile$layers))) {
     lyr <- profile$layers[i, ]
     line <- sprintf(
-      "%5d %5s %5s %5s %5s %5.2f %5.2f %5.2f %5.2f %5.1f %5.1f %5.0f %5s %5s %5s %5s %5s",
+      "%6d %5s %5s %5s %5s %5.2f %5s %5.2f %5.2f %5.1f %5.1f %5.0f %5s %5s %5s %5s %5s",
       as.integer(lyr$SLB),
       substr(sanitize_char(lyr$SLMH, "-99"), 1, 5),
       format_dssat_decimal(lyr$SLLL, 3, 5),
       format_dssat_decimal(lyr$SDUL, 3, 5),
       format_dssat_decimal(lyr$SSAT, 3, 5),
       coalesce_num(lyr$SRGF, 1),
-      coalesce_num(lyr$SSKS, -99),
+      format_dssat_numeric(lyr$SSKS, 5, ifelse(!is.na(lyr$SSKS) && lyr$SSKS >= 100, 1, 2)),
       coalesce_num(lyr$SBDM, -99),
       coalesce_num(lyr$SLOC, -99),
       coalesce_num(lyr$SLCL, -99),
@@ -888,11 +889,11 @@ build_simple_fallback_profile <- function(point_sf, point_id, lat, lon, comp_tbl
     dplyr::mutate(
       depth_num = as.numeric(sub('.*-', '', sub('cm', '', depth_range))),
       soc = om_pct / 1.724,
-      SLLL = clip01(soil_ptf_saxton_slll(silt_pct, clay_pct, soc, coalesce_num(bulk_density, 1.4), 0)),
+      SLLL = pmax(clip01(soil_ptf_saxton_slll(silt_pct, clay_pct, soc, coalesce_num(bulk_density, 1.4), 0)), 0.02, na.rm = TRUE),
       SDUL = clip01(soil_ptf_saxton_sdul(silt_pct, clay_pct, soc, coalesce_num(bulk_density, 1.4), 0)),
       SSAT = clip01(soil_ptf_saxton_ssat(silt_pct, clay_pct, soc, coalesce_num(bulk_density, 1.4), 0)),
-      SDUL = pmax(SDUL, SLLL + 0.04),
-      SSAT = pmax(SSAT, SDUL + 0.01),
+      SDUL = pmax(SDUL, SLLL + 0.04, na.rm = TRUE),
+      SSAT = pmax(SSAT, SDUL + 0.01, na.rm = TRUE),
       SLB = as.integer(round(depth_num)),
       SLMH = '-99',
       SRGF = 1.0,

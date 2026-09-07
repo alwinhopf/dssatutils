@@ -289,7 +289,7 @@ def test_agera5_timeseries_backend_writes_weather_file(tmp_path, monkeypatch):
     }).to_csv(csv_path, index=False)
     monkeypatch.setattr(
         agera5, "_download_agera5_timeseries",
-        lambda year, area, cache_dir, data_format: str(csv_path),
+        lambda year, area, cache_dir, data_format, **kwargs: str(csv_path),
     )
     points = pd.DataFrame({"ID": ["P1"], "LAT": [40.0], "LONG": [-90.0]})
     out_dir = tmp_path / "out"
@@ -301,6 +301,92 @@ def test_agera5_timeseries_backend_writes_weather_file(tmp_path, monkeypatch):
     lines = (out_dir / "P1.WTH").read_text().splitlines()
     assert len([line for line in lines if line.startswith("2010")]) == 365
     assert "  26.9" in lines[4]
+
+
+def test_agera5_validate_timeseries_csv_enforces_completeness(tmp_path):
+    import dssatutils.weather_agera5 as agera5
+
+    dates = pd.date_range("2010-01-01", "2010-12-31", freq="D")
+    csv_path = tmp_path / "valid.csv"
+    df = pd.DataFrame({
+        "valid_time": dates,
+        "latitude": 40.0,
+        "longitude": -90.0,
+        "Temperature_Air_2m_Max_24h": 300.0,
+        "Temperature_Air_2m_Min_24h": 280.0,
+        "Solar_Radiation_Flux": 12_000_000.0,
+        "Precipitation_Flux": 2.0,
+        "Dew_Point_Temperature_2m_Mean_24h": 275.0,
+        "Relative_Humidity_2m_15h": 60.0,
+        "Wind_Speed_10m_Mean_24h": 3.0,
+    })
+    df.to_csv(csv_path, index=False)
+
+    # Full valid CSV matches year 2010
+    assert agera5._valid_agera5_timeseries_csv(str(csv_path), 2010) is True
+    # Wrong year fails
+    assert agera5._valid_agera5_timeseries_csv(str(csv_path), 2011) is False
+
+    # Physical inversion preserved
+    df_inv = df.copy()
+    df_inv.loc[10, "Temperature_Air_2m_Max_24h"] = 270.0
+    df_inv.loc[10, "Temperature_Air_2m_Min_24h"] = 280.0
+    inv_path = tmp_path / "inv.csv"
+    df_inv.to_csv(inv_path, index=False)
+    assert agera5._valid_agera5_timeseries_csv(str(inv_path), 2010) is True
+
+    # Missing column fails
+    df_no_srad = df.drop(columns=["Solar_Radiation_Flux"])
+    no_srad_path = tmp_path / "no_srad.csv"
+    df_no_srad.to_csv(no_srad_path, index=False)
+    assert agera5._valid_agera5_timeseries_csv(str(no_srad_path), 2010) is False
+
+    # Duplicate dates fails
+    df_dup = pd.concat([df, df.iloc[[10]]], ignore_index=True)
+    dup_path = tmp_path / "dup.csv"
+    df_dup.to_csv(dup_path, index=False)
+    assert agera5._valid_agera5_timeseries_csv(str(dup_path), 2010) is False
+
+    # Missing days fails
+    short_path = tmp_path / "short.csv"
+    df.iloc[:100].to_csv(short_path, index=False)
+    assert agera5._valid_agera5_timeseries_csv(str(short_path), 2010) is False
+
+
+def test_agera5_incomplete_series_skips_wth_emission(tmp_path, monkeypatch):
+    import dssatutils.weather_agera5 as agera5
+
+    # CSV only contains 100 days
+    dates = pd.date_range("2010-01-01", periods=100, freq="D")
+    csv_path = tmp_path / "incomplete.csv"
+    pd.DataFrame({
+        "valid_time": dates,
+        "latitude": 40.0,
+        "longitude": -90.0,
+        "Temperature_Air_2m_Max_24h": 300.0,
+        "Temperature_Air_2m_Min_24h": 280.0,
+        "Solar_Radiation_Flux": 12_000_000.0,
+        "Precipitation_Flux": 2.0,
+        "Dew_Point_Temperature_2m_Mean_24h": 275.0,
+        "Relative_Humidity_2m_15h": 60.0,
+        "Wind_Speed_10m_Mean_24h": 3.0,
+    }).to_csv(csv_path, index=False)
+
+    monkeypatch.setattr(
+        agera5, "_download_agera5_timeseries",
+        lambda year, area, cache_dir, data_format, **kwargs: str(csv_path),
+    )
+    points = pd.DataFrame({"ID": ["P1"], "LAT": [40.0], "LONG": [-90.0]})
+    out_dir = tmp_path / "out"
+    agera5.process_weather_agera5(
+        points, 2010, 2010, str(out_dir), "ID", "LAT", "LONG", 1,
+        str(tmp_path / "errors.log"), str(tmp_path / "cache"),
+        agera5_backend="timeseries",
+    )
+    # The incomplete .WTH file must NOT be written
+    assert not (out_dir / "P1.WTH").exists()
+    assert not (out_dir / "P1.WTH.tmp").exists()
+
 
 
 def test_alderman_coordinate_aliases_and_point_geometry():

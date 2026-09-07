@@ -139,7 +139,7 @@ def _find_nearest_indices(ds: xr.Dataset, lons: np.ndarray,
                            lats: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Return arrays of integer (lat_idx, lon_idx) for each (lon, lat) pair.
-    Returns NaN index where the point falls outside the dataset extent.
+    Returns -1 indices where the point falls outside the dataset extent.
     """
     grid_lats = ds["lat"].values
     grid_lons = ds["lon"].values
@@ -162,6 +162,18 @@ def _find_nearest_indices(ds: xr.Dataset, lons: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
+# Point-aligned extraction (mirrors the R helper, including invalid rows).
+def _gridmet_extract_cells(data, lat_idxs, lon_idxs, n_use):
+    if len(lat_idxs) != len(lon_idxs):
+        raise ValueError("GRIDMET latitude/longitude index counts differ")
+    values = np.full((len(lat_idxs), n_use), np.nan)
+    for i, (lat, lon) in enumerate(zip(lat_idxs, lon_idxs)):
+        if lat < 0 or lon < 0:
+            continue
+        values[i, :] = data[:n_use, lat, lon]
+    return values
+
+
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -317,11 +329,9 @@ def process_weather_gridmet(
                     n_use = min(n_time, n_expected)
 
                     # Extract rows for chunk points
-                    pt_vals = np.full((len(chunk_indices), n_use), np.nan)
-                    for ci, (li, loi) in enumerate(zip(chunk_lat_idxs, chunk_lon_idxs)):
-                        if li == -1:
-                            continue
-                        pt_vals[ci, :] = data_3d[:n_use, li, loi]
+                    pt_vals = _gridmet_extract_cells(
+                        data_3d, chunk_lat_idxs, chunk_lon_idxs, n_use
+                    )
 
                     year_arrays.append(pt_vals)
                     del data_3d

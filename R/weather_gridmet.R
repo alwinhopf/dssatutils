@@ -156,7 +156,7 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
         r <- terra::rast(fpath)
         
         # KEY OPTIMIZATION: Extract only for current CHUNK of cells
-        vals <- r[chunk_cell_ids] 
+        vals <- .gridmet_extract_cells(r, chunk_cell_ids)
         
         # Handle current year truncation if needed
         days_in_this_year <- seq(as.Date(paste0(yr, "-01-01")), as.Date(paste0(yr, "-12-31")), by="day")
@@ -262,4 +262,16 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
   }
   
   message(sprintf("GridMET processing complete. Output: %s", output_dir))
+}
+
+# Preserve one row per requested point: terra's `r[cells]` drops NA cells.
+# Otherwise an out-of-coverage point silently assigns later cells to wrong IDs.
+.gridmet_extract_cells <- function(r, cell_ids) {
+  valid <- which(!is.na(cell_ids))
+  if (!length(valid)) return(matrix(NA_real_, length(cell_ids), terra::nlyr(r)))
+  extracted <- as.matrix(r[cell_ids[valid]])
+  if (nrow(extracted) != length(valid)) stop("GRIDMET extraction changed the point count")
+  values <- matrix(NA_real_, length(cell_ids), ncol(extracted))
+  values[valid, ] <- extracted
+  values
 }

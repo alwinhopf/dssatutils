@@ -22,6 +22,7 @@ Description: Reusable functions that download weather and soil data from a range
 License: MIT + file LICENSE
 Encoding: UTF-8
 Imports:
+    filelock,
     daymetr,
     nasapower,
     soilDB,
