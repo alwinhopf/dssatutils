@@ -1,5 +1,4 @@
 library(testthat)
-library(dssatutils)
 
 write_sample_wth <- function(path, rows) {
   writeLines(c(
