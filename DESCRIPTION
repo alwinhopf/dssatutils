@@ -42,6 +42,7 @@ Imports:
     DSSAT
 Suggests:
     ecmwfr,
+    xml2,
     DBI,
     RSQLite,
     odbc,

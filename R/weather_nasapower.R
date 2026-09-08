@@ -69,13 +69,13 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
     tryCatch({
       
       # Download NASA-POWER data
-      power_data <- nasapower::get_power(
+      power_data <- dssatutils:::.provider_retry(function() nasapower::get_power(
         community    = "AG",
         lonlat       = c(longitude, latitude),
         pars         = nasa_params,
         dates        = c(start_date_str, end_date_str),
         temporal_api = "DAILY"
-      )
+      ))
       
       # Check if data is empty
       if (nrow(power_data) == 0) {
@@ -147,6 +147,7 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
       
     },
     error = function(e) {
+      if (inherits(e, "dssat_connectivity_error")) stop(e)
       error_message <- sprintf(
         "\n--- ERROR on task %d ---\nFailed to process point ID: %s\nCoords: Lat: %.3f, Lon: %.3f\nOriginal error: %s\n",
         i, point_id, latitude, longitude, conditionMessage(e)

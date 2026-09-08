@@ -55,14 +55,14 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
     }
     
     tryCatch({
-      daymet_data <- daymetr::download_daymet(
+      daymet_data <- dssatutils:::.provider_retry(function() daymetr::download_daymet(
         lat = latitude,
         lon = longitude,
         start = start_year,
         end = end_year,
         internal = TRUE,
         silent = TRUE
-      )
+      ))
       
       weather_data <- daymet_data$data
       
@@ -123,6 +123,7 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
       
     },  
     error = function(e) {
+      if (inherits(e, "dssat_connectivity_error")) stop(e)
       error_message <- sprintf(
         "\n--- ERROR on task %d ---\nFailed to process point ID: %s\nCoords: Lat: %.3f, Lon: %.3f\nOriginal error: %s\n",
         i, point_id, latitude, longitude, conditionMessage(e)

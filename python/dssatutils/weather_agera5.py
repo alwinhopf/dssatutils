@@ -27,6 +27,7 @@
 # ---------------------------------------------------------------------------
 
 import os
+from .provider_retry import provider_retry, ProviderConnectivityError, bounded_map
 import glob
 import shutil
 import time
@@ -458,7 +459,7 @@ def _download_agera5_timeseries(year: int, area, cache_dir: str,
             err = None
             returned = None
             try:
-                returned = _make_cds_client(cdsapi).retrieve(_CDS_TIMESERIES_DATASET, req, stage)
+                returned = provider_retry(lambda: _make_cds_client(cdsapi).retrieve(_CDS_TIMESERIES_DATASET, req, stage))
             except Exception as exc:  # client may finish transfer before raising
                 err = exc
             candidates = [stage, stage + ".csv", stage + ".partial.csv"]
@@ -467,6 +468,8 @@ def _download_agera5_timeseries(year: int, area, cache_dir: str,
             for candidate in candidates:
                 if promote(candidate):
                     return dest
+            if isinstance(err, ProviderConnectivityError):
+                raise err
             print(f"AgERA5 time-series download failed ({year}, area={area}): {err or 'no complete CSV returned'}")
         return None
     finally:
@@ -577,24 +580,22 @@ def _process_weather_agera5_timeseries(
             cache_only=cache_only, bounds=bounds)
         return (year, chunk, path)
 
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for year, chunk, path in pool.map(_dl, jobs):
-            if not path:
-                msg = f"  AgERA5 time-series missing ({year}, area={chunk['area']})"
-                print(msg)
-                if log_file:
-                    with open(log_file, "a") as lf:
-                        lf.write(msg + "\n")
-                continue
-            try:
-                _add_timeseries_chunk_to_points(path, chunk["idx"], ids, lats, lons, point_series)
-            except Exception as exc:  # noqa: BLE001
-                msg = f"  AgERA5 time-series parse failed ({path}): {exc}"
-                print(msg)
-                if log_file:
-                    with open(log_file, "a") as lf:
-                        lf.write(msg + "\n")
+    for year, chunk, path in bounded_map(_dl, jobs, workers):
+        if not path:
+            msg = f"  AgERA5 time-series missing ({year}, area={chunk['area']})"
+            print(msg)
+            if log_file:
+                with open(log_file, "a") as lf:
+                    lf.write(msg + "\n")
+            continue
+        try:
+            _add_timeseries_chunk_to_points(path, chunk["idx"], ids, lats, lons, point_series)
+        except Exception as exc:  # noqa: BLE001
+            msg = f"  AgERA5 time-series parse failed ({path}): {exc}"
+            print(msg)
+            if log_file:
+                with open(log_file, "a") as lf:
+                    lf.write(msg + "\n")
 
     expected_start = date(int(start_year), 1, 1)
     expected_end = effective_end

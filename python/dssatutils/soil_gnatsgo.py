@@ -98,6 +98,7 @@ def _gnatsgo_mukey(lat: float, lon: float, buffer_m: float = 45.0,
     for attempt in range(max_retries):
         try:
             r = requests.get(_WCS_BASE, params=params, timeout=120)
+            r.raise_for_status()
             ct = r.headers.get("Content-Type", "")
             if "tiff" not in ct and r.content[:2] not in (b"II", b"MM"):
                 # MapServer returns an HTML error page on a bad request.
@@ -106,7 +107,7 @@ def _gnatsgo_mukey(lat: float, lon: float, buffer_m: float = 45.0,
                 with rasterio.open(io.BytesIO(r.content)) as ds:
                     arr = ds.read(1)
                 if arr.size == 0:
-                    return {"ok": True, "mukey": None, "error": None}
+                    raise ValueError("WCS returned an empty raster")
                 cr, cc = arr.shape[0] // 2, arr.shape[1] // 2
                 mukey = int(arr[cr, cc])
                 nodata = {0, -2147483648, 2147483647}

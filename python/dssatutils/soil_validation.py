@@ -42,6 +42,11 @@ def _soil_lines_issue(lines):
                     raise ValueError
             except (ValueError, IndexError):
                 return "SOIL.SOL has invalid fixed-width layer fields; regenerate the derived SOL with the corrected writer"
+            hydraulic = {f.group(): float(row[start:end]) for f, start, end in zip(fields, starts, ends)
+                         if f.group() in ("SLLL", "SDUL", "SSAT")}
+            if (set(hydraulic) != {"SLLL", "SDUL", "SSAT"} or
+                    not 0 <= hydraulic["SLLL"] < hydraulic["SDUL"] < hydraulic["SSAT"] <= 1):
+                return "SOIL.SOL has invalid or missing hydraulic limits (require 0 <= SLLL < SDUL < SSAT <= 1)"
             depths.append(int(depth))
         if not depths:
             return "SOIL.SOL has no parseable SLB layer depths"
@@ -55,7 +60,7 @@ def _soil_lines_issue(lines):
 def soil_file_issue(path):
     """Return None for valid layer columns, otherwise a diagnostic (no mutation).
 
-    Checks formatting, not agronomic plausibility. DSSAT's -99 sentinel is valid.
+    Checks fixed columns and required hydraulic limits; optional fields allow -99.
     """
     path = Path(path)
     if not path.is_file():

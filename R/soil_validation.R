@@ -1,5 +1,4 @@
-# Fixed-column soil preflight. Formatting only, not agronomic plausibility.
-# DSSAT's -99 missing-value sentinel is allowed.
+# Fixed-column preflight plus required hydraulic limits. Optional fields may use -99.
 soil_file_issue <- function(path) {
   if (!file.exists(path)) return("SOIL.SOL is missing")
   lines <- tryCatch(readLines(path, warn = FALSE, encoding = "UTF-8"), error = function(e) character())
@@ -28,6 +27,10 @@ soil_file_issue <- function(path) {
           any(nzchar(separators) & !grepl("^\\s$", separators))) {
         return("SOIL.SOL has invalid fixed-width layer fields; regenerate the derived SOL with the corrected writer")
       }
+      hydraulic <- values[match(c("SLLL", "SDUL", "SSAT"), fields)]
+      if (any(!is.finite(hydraulic)) || hydraulic[1] < 0 ||
+          hydraulic[1] >= hydraulic[2] || hydraulic[2] >= hydraulic[3] || hydraulic[3] > 1)
+        return("SOIL.SOL has invalid or missing hydraulic limits (require 0 <= SLLL < SDUL < SSAT <= 1)")
       depths <- c(depths, depth)
     }
     if (!length(depths)) return("SOIL.SOL has no parseable SLB layer depths")

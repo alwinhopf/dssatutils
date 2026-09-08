@@ -163,6 +163,11 @@ def _format_dssat_sol_file(site_data: pd.DataFrame, output_dir: str,
     if site_data[critical].isna().all().any():
         raise ValueError("Critical soil data (clay/silt/bulk density) all NA.")
 
+    hydraulic = site_data[["SLLL", "SDUL", "SSAT"]].to_numpy(dtype=float)
+    if (not len(hydraulic) or not np.isfinite(hydraulic).all() or
+            ((hydraulic[:, 0] < 0) | (hydraulic[:, 0] >= hydraulic[:, 1]) |
+             (hydraulic[:, 1] >= hydraulic[:, 2]) | (hydraulic[:, 2] > 1)).any()):
+        raise ValueError("Invalid or missing soil hydraulic limits; regenerate from usable source data")
     soil_id = str(site_data["ID"].iloc[0])
     lat = float(site_data["latitude"].iloc[0])
     lon = float(site_data["longitude"].iloc[0])
@@ -256,8 +261,8 @@ def _fetch_polaris(gridfile, id_col: str, stat: str,
         pts = [(float(lons[i]), float(lats[i])) for i in idxs]
         for var in _VARS:
             for d, dlabel in enumerate(_DEPTH_LABELS):
-                src_path = _tile_source(var, stat, dlabel, tile, cache_dir)
                 try:
+                    src_path = _tile_source(var, stat, dlabel, tile, cache_dir)
                     with rasterio.open(src_path) as src:
                         sampled = list(src.sample(pts, masked=True))
                 except Exception as exc:  # missing tile (e.g. offshore) etc.
@@ -349,11 +354,6 @@ def process_soils_polaris(
     wide["oc_pct"] = wide["om"] / 1.724
     wide["SSKS"] = wide["ksat"].apply(_ssks_cmhr)
 
-    lim = wide.apply(lambda r: pd.Series(water_limits(
-        r["theta_r"], r["theta_s"], r["alpha"], r["n"],
-        sand=r["sand"], clay=r["clay"], om_pct=r["om"])), axis=1)
-    wide = pd.concat([wide, lim], axis=1)
-
     coords = grid_wgs84[[id_col, "lon_wgs84", "lat_wgs84"]].rename(
         columns={id_col: "ID", "lon_wgs84": "longitude", "lat_wgs84": "latitude"})
     final_df = wide.merge(coords, on="ID", how="inner")
@@ -373,6 +373,10 @@ def process_soils_polaris(
     for uid in final_df["ID"].unique():
         subset = final_df[final_df["ID"] == uid].copy()
         try:
+            lim = subset.apply(lambda r: pd.Series(water_limits(
+                r["theta_r"], r["theta_s"], r["alpha"], r["n"],
+                sand=r["sand"], clay=r["clay"], om_pct=r["om"])), axis=1)
+            subset = pd.concat([subset, lim], axis=1)
             _format_dssat_sol_file(subset, output_sol_dir, source_tag=stat)
             success += 1
         except Exception as exc:

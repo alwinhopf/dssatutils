@@ -46,9 +46,24 @@ is_wth_valid <- function(path, end_year = NULL, required_columns = NULL, start_y
     lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
     data_lines <- grep("^\\s*[0-9]{5,7}", lines, value = TRUE)
     if (!length(data_lines)) return(FALSE)
-    parsed <- lapply(data_lines, .parse_wth_data_line)
-    if (any(vapply(parsed, is.null, logical(1)))) return(FALSE)
-    weather <- do.call(rbind, lapply(parsed, `[[`, "values"))
+    # Parse columns in vectors, rather than running trimws/date conversion for
+    # each of the millions of daily rows in a regional cache. Preserve the
+    # scalar parser as a fallback for whitespace-delimited, nonstandard rows.
+    fields <- vapply(c(1L, seq.int(8L, 44L, by = 6L)), function(start) {
+      trimws(substr(data_lines, start, if (start == 1L) 7L else start + 5L))
+    }, character(length(data_lines)))
+    fields <- matrix(fields, ncol = 8L)
+    fixed <- nchar(data_lines) >= 49L & grepl("^[0-9]{5,7}$", fields[, 1L]) &
+      rowSums(fields[, -1L, drop = FALSE] == "") == 0L
+    codes <- fields[, 1L]
+    weather <- matrix(suppressWarnings(as.numeric(fields[, -1L])), ncol = 7L)
+    for (i in which(!fixed)) {
+      row <- .parse_wth_data_line(data_lines[i])
+      if (is.null(row)) return(FALSE)
+      codes[i] <- row$code
+      weather[i, ] <- row$values
+    }
+    if (any(!is.finite(weather))) return(FALSE)
     colnames(weather) <- c("SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND")
     observed <- function(x) abs(x + 99) > 1e-6
     within <- function(x, lower, upper) {
@@ -67,7 +82,16 @@ is_wth_valid <- function(path, end_year = NULL, required_columns = NULL, start_y
     required_columns <- intersect(toupper(as.character(required_columns)), colnames(weather))
     if (length(required_columns) &&
         any(!observed(weather[, required_columns, drop = FALSE]))) return(FALSE)
-    dates <- as.Date(vapply(parsed, function(x) as.character(.wth_code_to_date(x$code)), character(1)))
+    short <- nchar(codes) == 5L
+    if (any(!nchar(codes) %in% c(5L, 7L))) return(FALSE)
+    years <- as.integer(ifelse(short, substr(codes, 1L, 2L), substr(codes, 1L, 4L)))
+    years[short] <- years[short] + ifelse(years[short] < 80L, 2000L, 1900L)
+    days <- as.integer(ifelse(short, substr(codes, 3L, 5L), substr(codes, 5L, 7L)))
+    leap <- years %% 4L == 0L & (years %% 100L != 0L | years %% 400L == 0L)
+    if (anyNA(c(years, days)) || any(days < 1L | days > 365L + leap)) return(FALSE)
+    unique_years <- unique(years)
+    starts <- as.Date(sprintf("%04d-01-01", unique_years))
+    dates <- starts[match(years, unique_years)] + days - 1L
     if (any(is.na(dates)) || anyDuplicated(dates) ||
         (length(dates) > 1L && any(diff(dates) != 1))) return(FALSE)
     requested_start <- if (!is.null(start_date)) as.Date(start_date) else if (!is.null(start_year)) {

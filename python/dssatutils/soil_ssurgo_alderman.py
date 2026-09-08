@@ -829,6 +829,11 @@ def format_dssat_decimal(x, digits=3, width=5) -> str:
 
 
 def _write_dssat_soil_file(profile, output_dir):
+    hydraulic = profile["layers"][["SLLL", "SDUL", "SSAT"]].to_numpy(dtype=float)
+    if (not len(hydraulic) or not np.isfinite(hydraulic).all() or
+            ((hydraulic[:, 0] < 0) | (hydraulic[:, 0] >= hydraulic[:, 1]) |
+             (hydraulic[:, 1] >= hydraulic[:, 2]) | (hydraulic[:, 2] > 1)).any()):
+        raise ValueError("Invalid or missing soil hydraulic limits; regenerate from usable source data")
     profile_id = profile["profile_id"]
     filename = os.path.join(output_dir, f"{profile_id}.SOL")
 

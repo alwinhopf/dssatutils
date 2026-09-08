@@ -48,9 +48,20 @@ gnatsgo_mukey_at_point <- function(lat, lon, buffer_m = 45, max_retries = 3,
       # mukey.wcs returns a CATEGORICAL raster: the cell stores a factor whose
       # LABEL is the mukey string. as.character() yields the label; as.integer()
       # would wrongly return the factor level code. Extract at the exact point.
-      val <- tryCatch(terra::extract(r, terra::vect(pt5070))[1, 2],
-                      error = function(e) NA)
-      mukey_chr <- if (is.na(val) || is.null(val)) NA_character_ else as.character(val)
+      extracted <- tryCatch({
+        if (!inherits(r, "SpatRaster") || terra::ncell(r) == 0L)
+          stop("WCS returned no raster")
+        values <- terra::extract(r, terra::vect(pt5070))
+        if (nrow(values) != 1L || ncol(values) < 2L) stop("Invalid WCS extraction shape")
+        values[1, 2]
+      }, error = function(e) e)
+      if (inherits(extracted, "error")) {
+        last_err <- paste("WCS extraction failed:", conditionMessage(extracted))
+        if (attempt < max_retries) Sys.sleep(retry_delay_seconds)
+        next
+      }
+      val <- extracted
+      mukey_chr <- if (is.na(val)) NA_character_ else as.character(val)
       mukey <- suppressWarnings(as.integer(mukey_chr))
       if (is.na(mukey) || mukey <= 0)
         return(list(ok = TRUE, mukey = NA_character_, error = NA_character_))
@@ -169,9 +180,11 @@ process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_indivi
     bedrock_depth <- 200
     if (isTRUE(bq$ok) && !is.null(bq$data)) {
       bd <- as.data.frame(bq$data)
-      if (nrow(bd) > 0 && !all(is.na(bd$brockdepmin))) bedrock_depth <- min(bd$brockdepmin, na.rm = TRUE)
+      bd_vals <- suppressWarnings(as.numeric(bd$brockdepmin))
+      bd_vals <- bd_vals[is.finite(bd_vals)]
+      if (length(bd_vals) > 0) bedrock_depth <- min(bd_vals)
     }
-    if (is.infinite(bedrock_depth)) bedrock_depth <- 200
+    if (!is.finite(bedrock_depth) || is.na(bedrock_depth) || bedrock_depth <= 0) bedrock_depth <- 200
 
     all_layers <- list("0-5cm"=c(0,5), "5-20cm"=c(5,20), "20-35cm"=c(20,35),
                        "35-50cm"=c(35,50), "50-65cm"=c(50,65), "65-80cm"=c(65,80),

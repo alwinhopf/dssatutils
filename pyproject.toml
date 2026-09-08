@@ -37,7 +37,9 @@ eobs-cds = ["cdsapi>=0.7"]
 hwsd = ["pyodbc>=4.0"]
 # Everything optional (CDS-backed weather + HWSD .mdb + anything added later).
 all = ["cdsapi>=0.7", "pyodbc>=4.0"]
-dev = ["pytest>=7.0"]
+# The offline AgERA5 recovery tests exercise the lazy CDS client import with a
+# mocked client, so the test environment still needs the small cdsapi package.
+dev = ["pytest>=7.0", "cdsapi>=0.7"]
 
 [project.urls]
 Homepage = "https://github.com/alwinhopf/dssatutils"

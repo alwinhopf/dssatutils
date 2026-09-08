@@ -475,7 +475,9 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
     },
     robust_SDA_query = function(query, ...) {
       if (grepl("brockdepmin", query)) {
-        list(ok = TRUE, data = data.frame(mukey = "12345", brockdepmin = 200.0), error = NA_character_)
+        # SDA commonly returns numeric-looking columns as character data.
+        # Keep the mock faithful so the R path cannot regress to min() on text.
+        list(ok = TRUE, data = data.frame(mukey = "12345", brockdepmin = "200.0"), error = NA_character_)
       } else {
         list(ok = TRUE, data = data.frame(
           mukey = "12345",
@@ -545,7 +547,7 @@ test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
     },
     robust_SDA_query_alderman = function(query, ...) {
       if (grepl("muaggatt", query)) {
-        data.frame(mukey = "12345", brockdepmin = 200.0)
+        data.frame(mukey = "12345", brockdepmin = "200.0")
       } else if (grepl("component", query)) {
         data.frame(
           compname = "Miami",

@@ -228,9 +228,11 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
     bedrock_depth <- 200
     if (isTRUE(bq$ok) && !is.null(bq$data)) {
       bd <- as.data.frame(bq$data)
-      if (nrow(bd) > 0 && !all(is.na(bd$brockdepmin))) bedrock_depth <- min(bd$brockdepmin, na.rm = TRUE)
+      bd_vals <- suppressWarnings(as.numeric(bd$brockdepmin))
+      bd_vals <- bd_vals[is.finite(bd_vals)]
+      if (length(bd_vals) > 0) bedrock_depth <- min(bd_vals)
     }
-    if (is.infinite(bedrock_depth)) bedrock_depth <- 200
+    if (!is.finite(bedrock_depth) || is.na(bedrock_depth) || bedrock_depth <= 0) bedrock_depth <- 200
 
     # Define Layers
     all_layers <- list("0-5cm"=c(0,5), "5-20cm"=c(5,20), "20-35cm"=c(20,35),

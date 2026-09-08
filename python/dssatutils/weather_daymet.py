@@ -1,3 +1,4 @@
+from .provider_retry import ProviderConnectivityError, provider_transient, bounded_map
 # File: weather_daymet.py
 # Python port of weather_daymet.R
 #
@@ -76,6 +77,8 @@ def _download_daymet(lat: float, lon: float, start_year: int, end_year: int,
             if attempt < retries - 1:
                 time.sleep(backoff * (attempt + 1))
             else:
+                if provider_transient(exc):
+                    raise ProviderConnectivityError(str(exc)) from exc
                 raise RuntimeError(f"Daymet download failed: {exc}") from exc
 
 
@@ -181,6 +184,8 @@ def _process_single_point(args: dict) -> None:
             fh.write("\n".join(lines) + "\n")
 
     except Exception as exc:
+        if isinstance(exc, ProviderConnectivityError):
+            raise
         msg = (
             f"\n--- ERROR ---\n"
             f"Failed: Point ID {pid} | Lat {lat:.3f}, Lon {lon:.3f}\n"
@@ -239,13 +244,7 @@ def process_weather_daymet(
             )
         )
 
-    with ProcessPoolExecutor(max_workers=n_cores) as pool:
-        futures = {pool.submit(_process_single_point, t): t["point_id"] for t in tasks}
-        for fut in as_completed(futures):
-            pid = futures[fut]
-            try:
-                fut.result()
-            except Exception as exc:
-                print(f"ERROR (point {pid}): {exc}")
+    for _ in bounded_map(_process_single_point, tasks, max(1, n_cores)):
+        pass
 
     print(f"\nDaymet processing complete. Check the '{output_dir}' directory.\n")

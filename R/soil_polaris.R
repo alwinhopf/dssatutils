@@ -78,6 +78,12 @@ format_dssat_sol_file_polaris <- function(site_data, output_dir,
   if (nrow(site_data) == 0) stop("No soil layers found for this ID.")
   if (all(is.na(site_data$clay)) || all(is.na(site_data$silt)) || all(is.na(site_data$bd)))
     stop("Critical soil data (clay/silt/bulk density) all NA.")
+
+  hydraulic <- as.matrix(site_data[, c("SLLL", "SDUL", "SSAT"), drop = FALSE])
+  if (!nrow(hydraulic) || any(!is.finite(hydraulic)) ||
+      any(hydraulic[, 1] < 0 | hydraulic[, 1] >= hydraulic[, 2] |
+          hydraulic[, 2] >= hydraulic[, 3] | hydraulic[, 3] > 1))
+    stop("Invalid or missing soil hydraulic limits; profile must be regenerated from usable source data")
   soil_id <- as.character(site_data$ID[1])
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
   filename <- file.path(output_dir, paste0(soil_id, ".SOL"))
@@ -223,14 +229,6 @@ process_soils_polaris <- function(gridfile, soilfile_csv_path, output_sol_dir,
 
   wide$oc_pct <- wide$om / 1.724
   wide$SSKS <- vapply(wide$ksat, ssks_cmhr, numeric(1))
-  lim <- mapply(function(tr, ts, al, nn, sa, cl, om)
-    water_limits(tr, ts, al, nn, sand = sa, clay = cl, om_pct = om),
-    wide$theta_r, wide$theta_s, wide$alpha, wide$n, wide$sand, wide$clay, wide$om,
-    SIMPLIFY = FALSE)
-  wide$SLLL <- vapply(lim, `[[`, numeric(1), "SLLL")
-  wide$SDUL <- vapply(lim, `[[`, numeric(1), "SDUL")
-  wide$SSAT <- vapply(lim, `[[`, numeric(1), "SSAT")
-
   coords_df <- data.frame(ID = grid_wgs84[[id_col]], longitude = cc[, 1], latitude = cc[, 2], stringsAsFactors = FALSE)
   final_df <- merge(wide, coords_df, by = "ID")
   utils::write.csv(data.frame(ID = grid_wgs84[[id_col]], SOIL_ID = grid_wgs84[[id_col]]), soilfile_csv_path, row.names = FALSE)
@@ -241,7 +239,17 @@ process_soils_polaris <- function(gridfile, soilfile_csv_path, output_sol_dir,
   success <- 0; errors <- 0
   for (uid in unique(final_df$ID)) {
     subset_df <- final_df[final_df$ID == uid, , drop = FALSE]
-    res <- tryCatch({ format_dssat_sol_file_polaris(subset_df, output_sol_dir, source_tag = stat); TRUE },
+    res <- tryCatch({
+      # Isolate hydraulic derivation as well as writing: one bad point must
+      # never discard usable profiles elsewhere in the batch.
+      lim <- mapply(function(tr, ts, al, nn, sa, cl, om)
+        water_limits(tr, ts, al, nn, sand = sa, clay = cl, om_pct = om),
+        subset_df$theta_r, subset_df$theta_s, subset_df$alpha, subset_df$n,
+        subset_df$sand, subset_df$clay, subset_df$om, SIMPLIFY = FALSE)
+      for (key in c("SLLL", "SDUL", "SSAT")) subset_df[[key]] <- vapply(lim, `[[`, numeric(1), key)
+      format_dssat_sol_file_polaris(subset_df, output_sol_dir, source_tag = stat)
+      TRUE
+    },
                     error = function(e) { cat(sprintf("ID: %s | Error: %s\n", uid, conditionMessage(e)), file = log_path, append = TRUE); FALSE })
     if (isTRUE(res)) success <- success + 1 else errors <- errors + 1
   }

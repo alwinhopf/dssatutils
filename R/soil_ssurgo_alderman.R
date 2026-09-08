@@ -702,6 +702,12 @@ format_dssat_numeric <- function(x, width = 5, digits = 1) {
 }
 
 write_dssat_soil_file <- function(profile, output_dir) {
+  hydraulic <- as.matrix(profile$layers[, c("SLLL", "SDUL", "SSAT"), drop = FALSE])
+  if (!nrow(hydraulic) || any(!is.finite(hydraulic)) ||
+      any(hydraulic[, 1] < 0 | hydraulic[, 1] >= hydraulic[, 2] |
+          hydraulic[, 2] >= hydraulic[, 3] | hydraulic[, 3] > 1))
+    stop("Invalid or missing soil hydraulic limits; profile must be regenerated from usable source data")
+
   filename <- file.path(output_dir, paste0(profile$profile_id, ".SOL"))
   con <- file(filename, open = "wt")
   on.exit(close(con), add = TRUE)

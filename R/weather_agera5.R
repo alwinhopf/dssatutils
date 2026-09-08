@@ -347,15 +347,16 @@ AGERA5_CDS_REQUEST_CAP <- 4L
               date = unname(bounds), data_format = data_format,
               area = as.numeric(job$area), target = basename(dest))
   err <- NULL
-  returned <- tryCatch(ecmwfr::wf_request(request = req, path = stage_dir),
-                       error = function(e) { err <<- conditionMessage(e); NULL })
+  returned <- tryCatch(dssatutils:::.provider_retry(function() ecmwfr::wf_request(request = req, path = stage_dir)),
+                       error = function(e) { err <<- e; NULL })
   canonical_stage <- file.path(stage_dir, basename(dest))
   candidates <- c(canonical_stage, paste0(canonical_stage, ".csv"),
                   paste0(canonical_stage, ".partial.csv"))
   if (is.character(returned)) candidates <- unique(c(candidates, returned[!is.na(returned)]))
   for (candidate in candidates) if (promote(candidate)) return(dest)
+  if (inherits(err, "dssat_connectivity_error")) stop(err)
   message(sprintf("AgERA5 time-series download failed (%d): %s", job$year,
-                  if (is.null(err)) "no complete CSV returned" else err))
+                  if (is.null(err)) "no complete CSV returned" else conditionMessage(err)))
   NULL
 }
 

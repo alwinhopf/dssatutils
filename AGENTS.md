@@ -56,3 +56,11 @@ python -m pytest tests/test_comprehensive.py -q
 Rscript -e "pkgload::load_all('.', quiet=TRUE); testthat::test_file('tests/testthat/test_new_sources.R')"
 Rscript -e "for (f in list.files('R', pattern='\\.R$', full.names=TRUE)) parse(f)"
 ```
+
+## 5. CI and clean-checkout guardrails
+
+Run the Python matrix and R testthat suite with live providers disabled before
+submitting changes. Optional backends must stay lazy, but any mocked offline path
+must declare the package it imports in the dev/test dependencies. Use realistic
+service-response types (including character numeric fields), keep R/Python
+schemas aligned, and keep caches/generated DSSAT files out of commits.
