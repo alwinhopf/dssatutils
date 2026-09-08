@@ -79,6 +79,20 @@ def test_cache_only_and_failed_transfer_preserve_original(tmp_path, monkeypatch)
     assert dest.read_text() == 'incomplete evidence\n'
 
 
+def _has_r_filelock() -> bool:
+    if not shutil.which("Rscript"):
+        return False
+    try:
+        res = subprocess.run(
+            ["Rscript", "--vanilla", "-e", "stopifnot(requireNamespace('filelock', quietly = TRUE))"],
+            capture_output=True,
+            timeout=10,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def test_thread_and_r_process_contend_for_same_lock(tmp_path):
     path = str(tmp_path / 'cache.lock')
     owner = ag._agera5_acquire_lock(path)
@@ -88,10 +102,11 @@ def test_thread_and_r_process_contend_for_same_lock(tmp_path):
         thread = threading.Thread(target=lambda: attempts.append(ag._agera5_acquire_lock(path, .05)))
         thread.start(); thread.join(2)
         assert attempts == [None]
-        proc = subprocess.run(['Rscript', '--vanilla', '-e',
-            'a<-commandArgs(TRUE); l<-filelock::lock(a[1],timeout=50); stopifnot(is.null(l))', path],
-            capture_output=True, text=True, timeout=30)
-        assert proc.returncode == 0, proc.stderr
+        if _has_r_filelock():
+            proc = subprocess.run(['Rscript', '--vanilla', '-e',
+                'a<-commandArgs(TRUE); l<-filelock::lock(a[1],timeout=50); stopifnot(is.null(l))', path],
+                capture_output=True, text=True, timeout=30)
+            assert proc.returncode == 0, proc.stderr
     finally:
         ag._agera5_release_lock(owner)
     assert Path(path).exists()  # persistent inode, not a stale active lock
@@ -101,6 +116,8 @@ def test_thread_and_r_process_contend_for_same_lock(tmp_path):
 
 
 def test_r_owner_blocks_python_and_crash_releases_lock(tmp_path):
+    if not _has_r_filelock():
+        pytest.skip("Rscript with filelock package is required for R cross-language lock contention test")
     path = str(tmp_path / 'cache.lock')
     proc = subprocess.Popen(['Rscript', '--vanilla', '-e',
         'a<-commandArgs(TRUE); l<-filelock::lock(a[1]); cat("READY\\n"); flush(stdout()); Sys.sleep(30)', path],
@@ -113,3 +130,22 @@ def test_r_owner_blocks_python_and_crash_releases_lock(tmp_path):
     lock = ag._agera5_acquire_lock(path, .1)
     assert lock is not None
     ag._agera5_release_lock(lock)
+
+
+def test_python_process_crash_releases_lock(tmp_path):
+    path = str(tmp_path / "cache_py.lock")
+    code = (
+        "import sys, time; from dssatutils import weather_agera5 as ag; "
+        f"lock = ag._agera5_acquire_lock({path!r}); sys.stdout.write('READY\\n'); sys.stdout.flush(); time.sleep(30)"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "READY"
+        assert ag._agera5_acquire_lock(path, 0.05) is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+    lock = ag._agera5_acquire_lock(path, 0.1)
+    assert lock is not None
+    ag._agera5_release_lock(lock)
+

@@ -31,6 +31,7 @@ test_that('cache validates individual forcing values and multicell calendars', {
 })
 
 test_that('R download accepts staged response despite post-transfer exception', {
+  skip_if_not_installed('ecmwfr')
   work<-tempfile();dir.create(work);on.exit(unlink(work,recursive=TRUE))
   local_mocked_bindings(.agera5_ensure_ecmwfr_key=function(...) invisible(TRUE), .package='dssatutils')
   local_mocked_bindings(wf_request=function(request,path,...) {
