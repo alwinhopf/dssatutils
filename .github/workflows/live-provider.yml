@@ -1,0 +1,43 @@
+name: live-provider
+
+# Dedicated integration workflow for live remote data providers.
+# Isolated from pull-request runs to keep CI fast, reliable, and deterministic.
+
+on:
+  schedule:
+    - cron: '0 4 * * 0'  # Weekly on Sunday at 04:00 UTC
+  workflow_dispatch:
+
+jobs:
+  polaris-live-r:
+    name: POLARIS live R (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.3'
+          use-public-rspm: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libgeos-dev libproj-dev libudunits2-dev libsqlite3-dev
+
+      - name: Install R package dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          dependencies: '"hard"'
+          extra-packages: any::pkgload, any::testthat, any::ncdf4, any::DBI, any::RSQLite
+          install-pandoc: false
+
+      - name: Sample live POLARIS raster
+        shell: Rscript {0}
+        env:
+          RUN_POLARIS_LIVE: "true"
+          POLARIS_TIMEOUT_SEC: "30"
+          POLARIS_RETRIES: "2"
+        run: |
+          pkgload::load_all('.', quiet = TRUE)
+          testthat::test_file('tests/testthat/test_polaris_live.R', reporter = 'summary', stop_on_failure = TRUE)

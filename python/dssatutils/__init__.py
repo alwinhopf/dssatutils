@@ -80,6 +80,9 @@ _EXPORTS = {
     "process_soils_gnatsgo": "soil_gnatsgo",
     "process_soils_isdasoil": "soil_isdasoil",
     "process_soils_lucas": "soil_lucas",
+    "find_rscript": "discovery",
+    "find_dssat": "discovery",
+    "find_mpi_runner": "discovery",
 }
 
 __all__ = list(_EXPORTS)

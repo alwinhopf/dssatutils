@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
 from dssatutils import weather_agera5 as ag
+from dssatutils.discovery import find_rscript
 from dssatutils.weather_validation import is_wth_valid
 
 FIXTURE = Path(__file__).parent / 'fixtures/agera5_2001_complete.csv'
@@ -80,11 +81,12 @@ def test_cache_only_and_failed_transfer_preserve_original(tmp_path, monkeypatch)
 
 
 def _has_r_filelock() -> bool:
-    if not shutil.which("Rscript"):
+    rscript = find_rscript()
+    if not rscript:
         return False
     try:
         res = subprocess.run(
-            ["Rscript", "--vanilla", "-e", "stopifnot(requireNamespace('filelock', quietly = TRUE))"],
+            [rscript, "--vanilla", "-e", "stopifnot(requireNamespace('filelock', quietly = TRUE))"],
             capture_output=True,
             timeout=10,
         )
@@ -103,7 +105,9 @@ def test_thread_and_r_process_contend_for_same_lock(tmp_path):
         thread.start(); thread.join(2)
         assert attempts == [None]
         if _has_r_filelock():
-            proc = subprocess.run(['Rscript', '--vanilla', '-e',
+            rscript = find_rscript()
+            assert rscript is not None
+            proc = subprocess.run([rscript, '--vanilla', '-e',
                 'a<-commandArgs(TRUE); l<-filelock::lock(a[1],timeout=50); stopifnot(is.null(l))', path],
                 capture_output=True, text=True, timeout=30)
             assert proc.returncode == 0, proc.stderr
@@ -118,8 +122,10 @@ def test_thread_and_r_process_contend_for_same_lock(tmp_path):
 def test_r_owner_blocks_python_and_crash_releases_lock(tmp_path):
     if not _has_r_filelock():
         pytest.skip("Rscript with filelock package is required for R cross-language lock contention test")
+    rscript = find_rscript()
+    assert rscript is not None
     path = str(tmp_path / 'cache.lock')
-    proc = subprocess.Popen(['Rscript', '--vanilla', '-e',
+    proc = subprocess.Popen([rscript, '--vanilla', '-e',
         'a<-commandArgs(TRUE); l<-filelock::lock(a[1]); cat("READY\\n"); flush(stdout()); Sys.sleep(30)', path],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
