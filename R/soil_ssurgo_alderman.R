@@ -733,7 +733,7 @@ write_dssat_soil_file <- function(profile, output_dir) {
   for (i in seq_len(nrow(profile$layers))) {
     lyr <- profile$layers[i, ]
     line <- sprintf(
-      "%6d %5s %5s %5s %5s %5.2f %5s %5.2f %5.2f %5.1f %5.1f %5.0f %5s %5s %5s %5s %5s",
+      "%6d %5s %5s %5s %5s %5.2f %5s %5s %5s %5.1f %5.1f %5.0f %5s %5s %5s %5s %5s",
       as.integer(lyr$SLB),
       substr(sanitize_char(lyr$SLMH, "-99"), 1, 5),
       format_dssat_decimal(lyr$SLLL, 3, 5),
@@ -741,8 +741,8 @@ write_dssat_soil_file <- function(profile, output_dir) {
       format_dssat_decimal(lyr$SSAT, 3, 5),
       coalesce_num(lyr$SRGF, 1),
       format_dssat_numeric(lyr$SSKS, 5, ifelse(!is.na(lyr$SSKS) && lyr$SSKS >= 100, 1, 2)),
-      coalesce_num(lyr$SBDM, -99),
-      coalesce_num(lyr$SLOC, -99),
+      format_dssat_numeric(lyr$SBDM, 5, 2),
+      format_dssat_numeric(lyr$SLOC, 5, 2),
       coalesce_num(lyr$SLCL, -99),
       coalesce_num(lyr$SLSI, -99),
       coalesce_num(lyr$SLCF, -99),

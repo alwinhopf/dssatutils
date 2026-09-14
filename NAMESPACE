@@ -71,3 +71,5 @@ importFrom(foreach, foreach, "%dopar%")
 importFrom(dplyr, "%>%")
 importFrom(stats, aggregate, complete.cases, end, na.omit, setNames, start)
 importFrom(utils, head, setTxtProgressBar, tail, txtProgressBar, write.csv)
+
+export(repair_soil_file_format)

@@ -71,6 +71,41 @@ def soil_file_issue(path):
         return "SOIL.SOL is empty or unreadable"
 
 
+def repair_soil_file_format(input_path, output_path):
+    """Recover ONLY known row shifts / overflowing -99.00 sentinels.
+
+    Does not change numerical properties. Writes a new file exclusively, after
+    full validation; the caller owns backup/publication into a working cache.
+    This is not a general whitespace formatter or a physical soil correction.
+    """
+    lines = Path(input_path).read_text(encoding="utf-8").splitlines()
+    active = False
+    for i, row in enumerate(lines):
+        if row.startswith(("@", "*")):
+            active = bool(re.match(r"^@\s+SLB\b", row))
+            header = row
+            continue
+        if not active or not row.strip() or row.lstrip().startswith("!"):
+            continue
+        if _soil_lines_issue([header, row]) is None:
+            continue
+        # A six-character missing sentinel exceeded a five-character field.
+        candidate = re.sub(r"(?<= )-99\.00(?= |$)", "  -99", row)
+        candidates = [candidate]
+        if candidate.startswith(" "):
+            candidates.append(candidate[1:])  # historical cat(vector) shift
+        valid = [s for s in candidates if _soil_lines_issue([header, s]) is None]
+        if len(valid) != 1:
+            raise ValueError("Unrecognized or ambiguous soil layout; use original mapping")
+        lines[i] = valid[0]
+    issue = _soil_lines_issue(lines)
+    if issue:
+        raise ValueError(issue)
+    with Path(output_path).open("x", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return str(output_path)
+
+
 def rebuild_soil_files_from_mapping(mapping_csv, output_dir, soil_source):
     """Reformat SSURGO/GNATSGO mappings into a NEW directory, without downloads.
 

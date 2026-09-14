@@ -40,6 +40,41 @@ soil_file_issue <- function(path) {
   NULL
 }
 
+# Recover only known row shifts and overflowing missing sentinels, to a NEW file.
+repair_soil_file_format <- function(input_path, output_path) {
+  if (file.exists(output_path)) stop("output_path must not exist")
+  lines <- readLines(input_path, warn = FALSE)
+  check_rows <- function(rows) {
+    tmp <- tempfile(fileext = ".SOL")
+    on.exit(unlink(tmp))
+    writeLines(rows, tmp)
+    soil_file_issue(tmp)
+  }
+  active <- FALSE
+  for (i in seq_along(lines)) {
+    row <- lines[i]
+    if (grepl("^[@*]", row)) {
+      active <- grepl("^@\\s+SLB\\b", row)
+      header <- row
+      next
+    }
+    if (!active || !nzchar(trimws(row)) || grepl("^\\s*!", row)) next
+    if (is.null(check_rows(c(header, row)))) next
+    candidate <- gsub("(?<= )-99\\.00(?= |$)", "  -99", row, perl = TRUE)
+    candidates <- candidate
+    if (startsWith(candidate, " ")) candidates <- c(candidates, substring(candidate, 2))
+    valid <- candidates[vapply(candidates, function(x) is.null(check_rows(c(header, x))), logical(1))]
+    if (length(valid) != 1L) stop("Unrecognized or ambiguous soil layout; use original mapping")
+    lines[i] <- valid
+  }
+  issue <- check_rows(lines)
+  if (!is.null(issue)) stop(issue)
+  con <- file(output_path, open = "wx")
+  on.exit(close(con), add = TRUE)
+  writeLines(lines, con)
+  output_path
+}
+
 # Reformat a saved mapping into a NEW directory: no API calls, no recalculation
 # of hydraulic properties, and no overwriting existing caches (even empty dirs).
 rebuild_soil_files_from_mapping <- function(mapping_csv, output_dir, soil_source) {

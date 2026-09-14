@@ -265,3 +265,11 @@ Offline regressions: `test_weather_recovery_integrity.py` and its R twin cover
 boundary/leap dates, individual missing values, multi-cell tiles, staged client
 errors, cache preservation, and parallel assembly. Python tests additionally run
 R/Python lock contention and process-exit recovery on the local platform.
+
+### Offline CI compatibility
+
+The offline suite supports Python 3.9 and newer; AgERA5 annotations are deferred
+to avoid evaluating newer union syntax during Python 3.9 imports. This is a
+Python compatibility detail with no R/Python behavioral divergence. R AgERA5 and
+ERA5-Land conversion tests mock credential setup as well as downloads, so they
+require neither CDS secrets nor a developer keyring.

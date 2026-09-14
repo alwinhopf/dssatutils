@@ -26,6 +26,8 @@
 # testable with synthetic data (see tests/test_smoke.py pattern).
 # ---------------------------------------------------------------------------
 
+from __future__ import annotations
+
 import os
 from .provider_retry import provider_retry, ProviderConnectivityError, bounded_map
 import glob

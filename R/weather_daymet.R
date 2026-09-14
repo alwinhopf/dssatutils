@@ -123,7 +123,6 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
       
     },  
     error = function(e) {
-      if (inherits(e, "dssat_connectivity_error")) stop(e)
       error_message <- sprintf(
         "\n--- ERROR on task %d ---\nFailed to process point ID: %s\nCoords: Lat: %.3f, Lon: %.3f\nOriginal error: %s\n",
         i, point_id, latitude, longitude, conditionMessage(e)

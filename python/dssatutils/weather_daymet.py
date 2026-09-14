@@ -184,8 +184,6 @@ def _process_single_point(args: dict) -> None:
             fh.write("\n".join(lines) + "\n")
 
     except Exception as exc:
-        if isinstance(exc, ProviderConnectivityError):
-            raise
         msg = (
             f"\n--- ERROR ---\n"
             f"Failed: Point ID {pid} | Lat {lat:.3f}, Lon {lon:.3f}\n"

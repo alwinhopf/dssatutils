@@ -241,6 +241,8 @@ test_that("process_weather_agera5 runs successfully with mocks", {
   log_file <- file.path(work_dir, "error.log")
 
   local_mocked_bindings(
+    # Credentials are outside the offline conversion contract.
+    .agera5_ensure_ecmwfr_key = function(...) invisible(NULL),
     .agera5_download_job = function(job) list(
       ok = TRUE, cached = TRUE, job = job,
       data_files = paste0("fake_", job$tag, ".nc"), message = "mock cache hit"
@@ -686,6 +688,8 @@ test_that("process_weather_era5_land runs successfully with mocks", {
 
   # Mock downloading by writing a synthetic CSV to the raw_csv destination
   local_mocked_bindings(
+    # Never consult a developer keyring or require CI secrets.
+    .dssatutils_ensure_cds_credentials = function(...) invisible(NULL),
     .download_era5_land_point_csv = function(latitude, longitude, start_date, end_date, target_file, ...) {
       df <- data.frame(
         time = seq(as.POSIXct("2010-01-01 00:00:00", tz = "UTC"), as.POSIXct("2010-01-02 23:00:00", tz = "UTC"), by = "hour"),

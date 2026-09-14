@@ -874,7 +874,7 @@ def _write_dssat_soil_file(profile, output_dir):
         # SLB occupies SIX columns; later fields occupy five plus a separator.
         line = (
             f"{slb:6d} {slmh:>5s} {slll:>5s} {sdul:>5s} {ssat:>5s} "
-            f"{srgf:5.2f} {ssks_text} {sbdm:5.2f} {sloc:5.2f} "
+            f"{srgf:5.2f} {ssks_text} {format_dssat_decimal(sbdm, 2, 5)} {format_dssat_decimal(sloc, 2, 5)} "
             f"{slcl:5.1f} {slsi:5.1f} {slcf:5.0f} "
             f"{slni:>5s} {slhw:>5s} {slhb:>5s} {scec:>5s} {sadc:>5s}"
         )
