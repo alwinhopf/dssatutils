@@ -9,15 +9,36 @@
 # ---------------------------------------------------------------------------
 
 .chirps_v3_config <- function(key, default) {
-  .dssatutils_config_get(paste0("weather.chirps_v3.", key), default)
+  if (exists(".dssatutils_config_get", mode = "function")) {
+    .dssatutils_config_get(paste0("weather.chirps_v3.", key), default)
+  } else if (requireNamespace("dssatutils", quietly = TRUE) &&
+             exists(".dssatutils_config_get", asNamespace("dssatutils"), inherits = FALSE)) {
+    get(".dssatutils_config_get", asNamespace("dssatutils"))(paste0("weather.chirps_v3.", key), default)
+  } else {
+    default
+  }
 }
 
 .chirps_v3_lat_limit <- function() {
-  .dssatutils_config_number("weather.chirps_v3.latitude_limit", 60)
+  if (exists(".dssatutils_config_number", mode = "function")) {
+    .dssatutils_config_number("weather.chirps_v3.latitude_limit", 60)
+  } else if (requireNamespace("dssatutils", quietly = TRUE) &&
+             exists(".dssatutils_config_number", asNamespace("dssatutils"), inherits = FALSE)) {
+    get(".dssatutils_config_number", asNamespace("dssatutils"))("weather.chirps_v3.latitude_limit", 60)
+  } else {
+    60
+  }
 }
 
 .chirps_v3_nodata <- function() {
-  .dssatutils_config_number("weather.chirps_v3.nodata", -9999)
+  if (exists(".dssatutils_config_number", mode = "function")) {
+    .dssatutils_config_number("weather.chirps_v3.nodata", -9999)
+  } else if (requireNamespace("dssatutils", quietly = TRUE) &&
+             exists(".dssatutils_config_number", asNamespace("dssatutils"), inherits = FALSE)) {
+    get(".dssatutils_config_number", asNamespace("dssatutils"))("weather.chirps_v3.nodata", -9999)
+  } else {
+    -9999
+  }
 }
 
 .chirps_v3_options <- function(product = NULL, stream = NULL,
@@ -422,6 +443,23 @@ process_weather_nasapower_chirps_v3 <- function(shapefile, start_year, end_year,
     end_date_str <- paste0(end_year, "-12-31")
   }
 
+  n_cores <- as.integer(n_cores)
+  if (is.na(n_cores) || n_cores < 1) {
+    stop("n_cores must be a positive integer.")
+  }
+
+  if (n_cores == 1) {
+    # Keep single-core runs in the current R process so local mocks and test
+    # fixtures are visible. This also avoids unnecessary worker startup.
+    foreach::registerDoSEQ()
+    message("Registered sequential backend for NASA-POWER + CHIRPS-v3 download.")
+  } else {
+    cl <- parallel::makeCluster(n_cores)
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+    doParallel::registerDoParallel(cl)
+    message(sprintf("Registered %d cores for parallel NASA-POWER + CHIRPS-v3 download.", n_cores))
+  }
+
   coords_list <- .extract_coords(shapefile, id_col, lat_col, lon_col)
   ids <- coords_list$ids
   lats <- coords_list$lats
@@ -437,16 +475,31 @@ process_weather_nasapower_chirps_v3 <- function(shapefile, start_year, end_year,
   nasa_params <- c("T2M_MAX", "T2M_MIN", "ALLSKY_SFC_SW_DWN", "PRECTOTCORR",
                    "T2MDEW", "RH2M", "WS2M")
 
-  for (i in seq_along(ids)) {
+  `%dopar%` <- foreach::`%dopar%`
+  pkgs <- c("nasapower", "lubridate", "dplyr")
+  if ("dssatutils" %in% loadedNamespaces()) pkgs <- c(pkgs, "dssatutils")
+
+  provider_retry <- if (exists(".provider_retry", asNamespace("dssatutils"), inherits = FALSE)) {
+    get(".provider_retry", asNamespace("dssatutils"))
+  } else if (exists(".provider_retry", inherits = TRUE)) {
+    get(".provider_retry", inherits = TRUE)
+  } else function(op, ...) op()
+
+  export_helpers <- c(".normalize_weather_missing_values", ".weather_log_lines",
+                      "merge_rainfall_into_weather", ".chirps_v3_lat_limit",
+                      ".chirps_v3_nodata", "provider_retry")
+  export_helpers <- export_helpers[vapply(export_helpers, exists, logical(1), inherits = TRUE)]
+
+  foreach(i = seq_along(ids), .packages = pkgs, .export = export_helpers) %dopar% {
     latitude <- lats[i]; longitude <- lons[i]; point_id <- ids[i]
     output_file <- file.path(output_dir, sprintf("%s.WTH", point_id))
-    if (file.exists(output_file)) next
+    if (file.exists(output_file)) return(NULL)
 
     tryCatch({
-      power_data <- nasapower::get_power(
+      power_data <- provider_retry(function() nasapower::get_power(
         community = "AG", lonlat = c(longitude, latitude),
         pars = nasa_params, dates = c(start_date_str, end_date_str),
-        temporal_api = "DAILY")
+        temporal_api = "DAILY"))
       if (nrow(power_data) == 0) stop("No data returned from NASA-POWER.")
 
       weather_data <- power_data %>%
@@ -491,11 +544,17 @@ process_weather_nasapower_chirps_v3 <- function(shapefile, start_year, end_year,
       weather_lines <- gsub("-99.0", "  -99", weather_lines, fixed = TRUE)
       writeLines(c(wth_header, weather_lines), con = output_file)
     }, error = function(e) {
+      if (inherits(e, "dssat_connectivity_error")) stop(e)
       error_message <- sprintf(
         "\n--- ERROR on task %d ---\nFailed point ID: %s\nCoords: Lat: %.3f, Lon: %.3f\nError: %s\n",
         i, point_id, latitude, longitude, conditionMessage(e))
-      cat(error_message); write(error_message, file = log_file, append = TRUE)
+      cat(error_message)
+      tryCatch(write(error_message, file = log_file, append = TRUE), error = function(...) NULL)
     })
+  }
+
+  if (exists("cl", inherits = FALSE)) {
+    try(parallel::stopCluster(cl), silent = TRUE)
   }
 
   message(sprintf("\nNASA-POWER + CHIRPS-v3 processing complete. Check '%s'.\n", output_dir))

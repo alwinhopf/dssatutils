@@ -228,6 +228,59 @@ test_that("process_weather_nasapower_chirps runs successfully with mocks", {
   assert_wth_valid(file.path(work_dir, "TEST1.WTH"))
 })
 
+test_that("process_weather_nasapower_chirps_v3 runs successfully with mocks", {
+  work_dir <- tempfile()
+  dir.create(work_dir)
+  on.exit(unlink(work_dir, recursive = TRUE))
+  
+  shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
+  log_file <- file.path(work_dir, "error.log")
+  
+  local_mocked_bindings(
+    extract_chirps_v3_rainfall = function(...) {
+      list(TEST1 = setNames(c(5.0, 6.0), c("2010001", "2010002")))
+    },
+    .package = "dssatutils"
+  )
+  
+  local_mocked_bindings(
+    get_power = function(community, lonlat, pars, dates, temporal_api) {
+      data.frame(
+        YEAR = c(2010, 2010),
+        MM = c(1, 1),
+        DOY = c(1, 2),
+        T2M_MAX = c(25.0, 26.0),
+        T2M_MIN = c(15.0, 16.0),
+        ALLSKY_SFC_SW_DWN = c(18.0, 19.0),
+        PRECTOTCORR = c(0.0, 1.2),
+        T2MDEW = c(12.0, 13.0),
+        RH2M = c(80.0, 82.0),
+        WS2M = c(3.0, 4.0)
+      )
+    },
+    .package = "nasapower"
+  )
+  
+  process_weather_nasapower_chirps_v3(
+    shapefile = shapefile,
+    start_year = 2010,
+    end_year = 2010,
+    output_dir = work_dir,
+    id_col = "ID",
+    lat_col = "LAT",
+    lon_col = "LONG",
+    n_cores = 1,
+    log_file = log_file,
+    chirps_cache_dir = file.path(work_dir, "chirps_v3_cache"),
+    chirps_product = "rnl",
+    chirps_stream = "final",
+    chirps_fetch_mode = "monthly_netcdf",
+    chirps_months = c(1)
+  )
+  
+  assert_wth_valid(file.path(work_dir, "TEST1.WTH"))
+})
+
 test_that("process_weather_agera5 runs successfully with mocks", {
   # AgERA5 is an optional source: ecmwfr is in Suggests, so it may be absent on
   # CI. Mocking requires the namespace to load, hence skip when not installed.

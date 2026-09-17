@@ -267,20 +267,32 @@ fetch_soilgrids_vrt <- function(gridfile, id_col) {
       depth_label <- depths[i]
       vrt_path <- paste0(sg_url, prop, "/", prop, "_", depth_label, "_mean.vrt")
       
-      tryCatch({
-        r <- terra::rast(vrt_path)
-        vals <- terra::extract(r, vect_points, ID=FALSE)
-        
-        temp_df <- data.frame(
-          ID = gridfile[[id_col]],
-          prop = prop,
-          depth_label = depth_label,
-          depth_bottom = depth_bottoms[i],
-          depth_center = depth_centers[i],
-          value = vals[,1] 
-        )
-        all_data[[paste(prop, i, sep="_")]] <- temp_df
-      }, error = function(e) message(paste("Skip", prop, depth_label)))
+      extracted <- FALSE
+      max_attempts <- 3L
+      for (attempt in seq_len(max_attempts)) {
+        tryCatch({
+          r <- terra::rast(vrt_path)
+          vals <- terra::extract(r, vect_points, ID=FALSE)
+          
+          temp_df <- data.frame(
+            ID = gridfile[[id_col]],
+            prop = prop,
+            depth_label = depth_label,
+            depth_bottom = depth_bottoms[i],
+            depth_center = depth_centers[i],
+            value = vals[,1] 
+          )
+          all_data[[paste(prop, i, sep="_")]] <- temp_df
+          extracted <- TRUE
+        }, error = function(e) {
+          if (attempt < max_attempts) {
+            Sys.sleep(1.5 * attempt)
+          } else {
+            message(paste("Skip", prop, depth_label))
+          }
+        })
+        if (extracted) break
+      }
     }
   }
   return(dplyr::bind_rows(all_data))
