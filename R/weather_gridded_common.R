@@ -24,7 +24,11 @@ weather_convert_units <- function(vals, units, kind) {
     if (grepl("s-1|/s", u)) vals <- vals * 86400
   } else if (kind == "srad") {
     if (grepl("w", u) && grepl("m", u)) vals <- vals * 0.0864
+    else if (grepl("mj", u)) { # already MJ m-2 day-1
+    }
+    else if (grepl("kj", u)) vals <- vals / 1000
     else if (grepl("j", u) && grepl("m", u)) vals <- vals / 1000000
+    else if (stats::median(vals, na.rm = TRUE) > 1e4) vals <- vals / 1000000
   } else if (kind == "wind") {
     # 10 m reanalysis wind -> 2 m (FAO-56 log profile factor ~0.748).
     vals <- vals * 0.748
@@ -68,13 +72,39 @@ weather_find_nc_file <- function(nc_dir, tokens) {
 weather_extract_netcdf_series <- function(path, ids, pts_vect, start_year, end_year, kind) {
   if (!requireNamespace("terra", quietly = TRUE)) stop("package 'terra' required for gridded NetCDF weather")
   r <- terra::rast(path)
-  tt <- as.Date(terra::time(r))
+  timestamps <- terra::time(r)
+  tt <- as.Date(timestamps)
   if (all(is.na(tt))) tt <- as.Date(terra::time(r), origin = "1970-01-01")
   yr <- as.integer(format(tt, "%Y"))
   keep <- which(yr >= start_year & yr <= end_year)
   if (!length(keep)) return(setNames(vector("list", length(ids)), ids))
+  if (anyDuplicated(timestamps[keep])) {
+    stop("Duplicate weather timestamps; remove overlapping records before extraction")
+  }
+  if (anyDuplicated(tt[keep])) {
+    stop("Subdaily weather data is unsupported; provide one daily record per date")
+  }
   r <- r[[keep]]; tt <- tt[keep]
   units <- tryCatch(terra::units(r)[1], error = function(e) "")
+  e <- terra::ext(r)
+  res <- terra::res(r)
+  crds <- terra::crds(pts_vect)
+  lat_res <- if (length(res) >= 2) res[2] else 0.5
+  lon_res <- if (length(res) >= 1) res[1] else 0.5
+  if (e$xmin >= 0) {
+    crds[, 1] <- ifelse(crds[, 1] < 0, crds[, 1] + 360, crds[, 1])
+  } else if (e$xmax <= 180) {
+    crds[, 1] <- ifelse(crds[, 1] > 180, crds[, 1] - 360, crds[, 1])
+  }
+  for (i in seq_along(ids)) {
+    lon_val <- crds[i, 1]; lat_val <- crds[i, 2]
+    if (lat_val < (e$ymin - lat_res) || lat_val > (e$ymax + lat_res) ||
+        lon_val < (e$xmin - lon_res) || lon_val > (e$xmax + lon_res)) {
+      stop(sprintf("Point %s (%.4f, %.4f) is outside grid domain: lat [%.4f, %.4f], lon [%.4f, %.4f]",
+                   ids[i], lat_val, lon_val, e$ymin, e$ymax, e$xmin, e$xmax))
+    }
+  }
+  pts_vect <- terra::vect(crds, crs = terra::crs(pts_vect))
   ex <- terra::extract(r, pts_vect, ID = FALSE)
   codes <- sprintf("%d%03d", as.integer(format(tt, "%Y")), as.integer(format(tt, "%j")))
   out <- setNames(vector("list", length(ids)), ids)

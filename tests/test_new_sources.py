@@ -10,6 +10,8 @@
 # Run:  python -m pytest tests/test_new_sources.py     (or python tests/test_new_sources.py)
 # ---------------------------------------------------------------------------
 
+from __future__ import annotations
+
 import math
 import os
 import sys

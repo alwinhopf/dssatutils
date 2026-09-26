@@ -90,7 +90,7 @@ def _pick_var(ds, aliases):
         lv = v.lower()
         if any(a in lv for a in aliases):
             return v
-    return next(iter(ds.data_vars), None)
+    return None
 
 
 def _coord_names(ds):
@@ -103,7 +103,7 @@ def convert_units(values, units: str, kind: str):
     units_l = (units or "").lower().replace("**", "^")
     arr = np.asarray(values, dtype=float)
     if kind == "temp":
-        if "k" in units_l or np.nanmedian(arr) > 100:
+        if bool(re.search(r"\b(k|kelvin|degk|deg_k)\b", units_l)) or np.nanmedian(arr) > 100:
             arr = arr - 273.15
     elif kind == "rain":
         if "s-1" in units_l or "/s" in units_l:
@@ -111,7 +111,14 @@ def convert_units(values, units: str, kind: str):
     elif kind == "srad":
         if "w" in units_l and "m" in units_l:
             arr = arr * 0.0864
+        elif "mj" in units_l:
+            # Already in MJ m-2 day-1 (DSSAT target unit); do not scale
+            pass
+        elif "kj" in units_l:
+            arr = arr / 1_000.0
         elif "j" in units_l and "m" in units_l:
+            arr = arr / 1_000_000.0
+        elif np.nanmedian(arr) > 1e4:
             arr = arr / 1_000_000.0
     elif kind == "wind":
         # Reanalysis/gridded wind is reported at 10 m; DSSAT wants 2 m.
@@ -135,9 +142,16 @@ def extract_netcdf_series(path, aliases, ids, lats, lons,
     try:
         ds = xr.concat(datasets, dim="time").sortby("time") if len(datasets) > 1 else datasets[0]
         var = _pick_var(ds, aliases)
+        if var is None:
+            raise KeyError(
+                f"No matching variable for aliases {aliases} found in dataset. "
+                f"Available variables: {list(ds.data_vars)}"
+            )
         latname, lonname = _coord_names(ds)
-        if var is None or latname is None or lonname is None or "time" not in ds.coords:
-            return out
+        if latname is None or lonname is None or "time" not in ds.coords:
+            raise ValueError(
+                f"Dataset missing required coordinates (lat, lon, time). Found: {list(ds.coords)}"
+            )
         da = ds[var]
         units = str(da.attrs.get("units", ""))
         times = pd.to_datetime(ds["time"].values)
@@ -146,10 +160,32 @@ def extract_netcdf_series(path, aliases, ids, lats, lons,
             return out
         da = da.isel(time=np.where(keep)[0])
         times = times[keep]
-        qlons = np.asarray(lons, dtype=float)
+        # These adapters consume daily forcing. Without interval bounds and
+        # accumulation metadata, subdaily integration is ambiguous.
+        if times.has_duplicates:
+            raise ValueError("Duplicate weather timestamps; remove overlapping records before extraction")
+        if times.normalize().has_duplicates:
+            raise ValueError("Subdaily weather data is unsupported; provide one daily record per date")
+        qlons = np.asarray(lons, dtype=float).copy()
         grid_lons = np.asarray(ds[lonname].values, dtype=float)
-        if np.nanmin(grid_lons) >= 0 and np.nanmax(qlons) <= 180:
+        grid_lats = np.asarray(ds[latname].values, dtype=float)
+        if np.nanmin(grid_lons) >= 0:
             qlons = np.where(qlons < 0, qlons + 360, qlons)
+        elif np.nanmax(grid_lons) <= 180:
+            qlons = np.where(qlons > 180, qlons - 360, qlons)
+
+        min_lat, max_lat = float(np.nanmin(grid_lats)), float(np.nanmax(grid_lats))
+        min_lon, max_lon = float(np.nanmin(grid_lons)), float(np.nanmax(grid_lons))
+        lat_res = abs(grid_lats[1] - grid_lats[0]) if len(grid_lats) > 1 else 0.5
+        lon_res = abs(grid_lons[1] - grid_lons[0]) if len(grid_lons) > 1 else 0.5
+        for lat_val, lon_val, pid in zip(lats, qlons, ids):
+            if not (min_lat - lat_res <= lat_val <= max_lat + lat_res) or \
+               not (min_lon - lon_res <= lon_val <= max_lon + lon_res):
+                raise ValueError(
+                    f"Point {pid} ({lat_val:.4f}, {lon_val:.4f}) is outside grid domain: "
+                    f"lat [{min_lat:.4f}, {max_lat:.4f}], lon [{min_lon:.4f}, {max_lon:.4f}]"
+                )
+
         pts_lat = xr.DataArray(np.asarray(lats, dtype=float), dims="points")
         pts_lon = xr.DataArray(qlons, dims="points")
         sel = da.sel({latname: pts_lat, lonname: pts_lon}, method="nearest")
