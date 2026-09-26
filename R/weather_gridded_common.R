@@ -16,27 +16,48 @@ weather_tdew_from_rh <- function(tmean_c, rh_pct) {
   (b * gamma) / (a - gamma)
 }
 
-weather_convert_units <- function(vals, units, kind) {
-  u <- tolower(ifelse(is.null(units), "", units))
+weather_convert_units <- function(vals, units, kind, wind_height_m = NULL) {
+  u <- gsub("per", "/", gsub("[[:space:]_^*]", "", tolower(if (is.null(units)) "" else units)), fixed = TRUE)
+  unsupported <- function() stop(sprintf("Unsupported or missing %s units: %s", kind, units))
   if (kind == "temp") {
-    if (grepl("\\bk\\b|kelvin", u) || stats::median(vals, na.rm = TRUE) > 100) vals <- vals - 273.15
-  } else if (kind == "rain") {
-    if (grepl("s-1|/s", u)) vals <- vals * 86400
-  } else if (kind == "srad") {
-    if (grepl("w", u) && grepl("m", u)) vals <- vals * 0.0864
-    else if (grepl("mj", u)) { # already MJ m-2 day-1
+    if (u %in% c("k", "kelvin", "degk", "degreek", "degreeskelvin")) return(vals - 273.15)
+    if (u %in% c("c", "degc", "celsius", "degreecelsius", "degreescelsius", "°c")) return(vals)
+    unsupported()
+  }
+  if (kind == "rain") {
+    if (u %in% c("mm", "mm/day", "mmday-1", "mmd-1", "kgm-2", "kg/m2")) return(vals)
+    if (u %in% c("kgm-2s-1", "kg/m2/s", "mms-1", "mm/s")) return(vals * 86400)
+    if (u %in% c("m", "m/day", "mday-1")) return(vals * 1000)
+    unsupported()
+  }
+  if (kind == "srad") {
+    if (u %in% c("wm-2", "w/m2")) return(vals * 0.0864)
+    for (prefix in c("mj", "kj", "j")) {
+      if (u %in% paste0(prefix, c("m-2", "/m2", "m-2day-1", "m-2d-1", "/m2/day", "m-2/day"))) {
+        return(vals * c(mj = 1, kj = .001, j = 1e-6)[[prefix]])
+      }
     }
-    else if (grepl("kj", u)) vals <- vals / 1000
-    else if (grepl("j", u) && grepl("m", u)) vals <- vals / 1000000
-    else if (stats::median(vals, na.rm = TRUE) > 1e4) vals <- vals / 1000000
-  } else if (kind == "wind") {
-    # 10 m reanalysis wind -> 2 m (FAO-56 log profile factor ~0.748).
-    vals <- vals * 0.748
-  } else if (kind == "vp") {
-    # Vapour pressure (hPa) -> dewpoint (degC), inverse Magnus formula.
-    e <- pmax(vals, 1e-3)
-    ln <- log(e / 6.1094)
-    vals <- (243.04 * ln) / (17.625 - ln)
+    unsupported()
+  }
+  if (kind == "wind") {
+    if (u %in% c("km/h", "kmh-1")) vals <- vals / 3.6
+    else if (!u %in% c("m/s", "ms-1")) unsupported()
+    if (is.null(wind_height_m) || !is.finite(wind_height_m) || wind_height_m < .1) stop("Wind requires an explicit height_m in metres")
+    if (wind_height_m == 2) return(vals)
+    return(vals * log(67.8 * 2 - 5.42) / log(67.8 * wind_height_m - 5.42))
+  }
+  if (kind == "vp") {
+    if (u == "pa") vals <- vals / 100
+    else if (u == "kpa") vals <- vals * 10
+    else if (!u %in% c("hpa", "mbar")) unsupported()
+    vals[vals <= 0] <- NA_real_
+    ln <- log(vals / 6.1094)
+    return(243.04 * ln / (17.625 - ln))
+  }
+  if (kind %in% c("rh", "rh2m")) {
+    if (u %in% c("1", "fraction")) return(vals * 100)
+    if (u %in% c("%", "percent", "percentage")) return(vals)
+    unsupported()
   }
   vals
 }
@@ -69,9 +90,10 @@ weather_find_nc_file <- function(nc_dir, tokens) {
   if (length(files)) files[1] else NA_character_
 }
 
-weather_extract_netcdf_series <- function(path, ids, pts_vect, start_year, end_year, kind) {
+weather_extract_netcdf_series <- function(path, ids, pts_vect, start_year, end_year, kind, wind_height_m = NULL) {
   if (!requireNamespace("terra", quietly = TRUE)) stop("package 'terra' required for gridded NetCDF weather")
   r <- terra::rast(path)
+  if (!terra::is.lonlat(r) || !terra::is.lonlat(pts_vect)) stop("Weather coordinates must be geographic longitude/latitude")
   timestamps <- terra::time(r)
   tt <- as.Date(timestamps)
   if (all(is.na(tt))) tt <- as.Date(terra::time(r), origin = "1970-01-01")
@@ -86,20 +108,28 @@ weather_extract_netcdf_series <- function(path, ids, pts_vect, start_year, end_y
   }
   r <- r[[keep]]; tt <- tt[keep]
   units <- tryCatch(terra::units(r)[1], error = function(e) "")
+  if (kind == "wind" && is.null(wind_height_m)) {
+    nc <- ncdf4::nc_open(path[1]); on.exit(ncdf4::nc_close(nc), add = TRUE)
+    vars <- names(nc$var)
+    heights <- lapply(vars, function(v) ncdf4::ncatt_get(nc, v, "height_m"))
+    valid <- vapply(heights, function(x) isTRUE(x$hasatt), logical(1))
+    if (sum(valid) == 1) wind_height_m <- as.numeric(heights[[which(valid)]]$value)
+  }
   e <- terra::ext(r)
   res <- terra::res(r)
   crds <- terra::crds(pts_vect)
-  lat_res <- if (length(res) >= 2) res[2] else 0.5
-  lon_res <- if (length(res) >= 1) res[1] else 0.5
+  lat_res <- 0
+  lon_res <- 0
   if (e$xmin >= 0) {
     crds[, 1] <- ifelse(crds[, 1] < 0, crds[, 1] + 360, crds[, 1])
   } else if (e$xmax <= 180) {
     crds[, 1] <- ifelse(crds[, 1] > 180, crds[, 1] - 360, crds[, 1])
   }
+  bounds <- c(e$xmin + res[1]/2, e$xmax - res[1]/2, e$ymin + res[2]/2, e$ymax - res[2]/2)
   for (i in seq_along(ids)) {
     lon_val <- crds[i, 1]; lat_val <- crds[i, 2]
-    if (lat_val < (e$ymin - lat_res) || lat_val > (e$ymax + lat_res) ||
-        lon_val < (e$xmin - lon_res) || lon_val > (e$xmax + lon_res)) {
+    if (lat_val < (bounds[3] - lat_res) || lat_val > (bounds[4] + lat_res) ||
+        lon_val < (bounds[1] - lon_res) || lon_val > (bounds[2] + lon_res)) {
       stop(sprintf("Point %s (%.4f, %.4f) is outside grid domain: lat [%.4f, %.4f], lon [%.4f, %.4f]",
                    ids[i], lat_val, lon_val, e$ymin, e$ymax, e$xmin, e$xmax))
     }
@@ -109,7 +139,7 @@ weather_extract_netcdf_series <- function(path, ids, pts_vect, start_year, end_y
   codes <- sprintf("%d%03d", as.integer(format(tt, "%Y")), as.integer(format(tt, "%j")))
   out <- setNames(vector("list", length(ids)), ids)
   for (i in seq_along(ids)) {
-    vals <- weather_convert_units(as.numeric(ex[i, ]), units, kind)
+    vals <- weather_convert_units(as.numeric(ex[i, ]), units, kind, wind_height_m)
     good <- is.finite(vals)
     v <- vals[good]; names(v) <- codes[good]
     out[[ids[i]]] <- v
@@ -137,7 +167,7 @@ process_local_netcdf_weather <- function(shapefile, start_year, end_year, output
       message(sprintf("  %s: no NetCDF for %s; writing -99 where needed.", source_label, v))
       next
     }
-    per_var[[v]] <- weather_extract_netcdf_series(paths, ids, pts_vect, start_year, end_year, spec$kind)
+    per_var[[v]] <- weather_extract_netcdf_series(paths, ids, pts_vect, start_year, end_year, spec$kind, wind_height_m = spec$height_m)
   }
   missing_forcing <- setdiff(c("TMAX", "TMIN", "RAIN", "SRAD"), names(per_var))
   if (length(missing_forcing)) {

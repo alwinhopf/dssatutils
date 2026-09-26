@@ -50,21 +50,21 @@ test_that("NetCDF extraction handles 0..360 and -180..180 longitude coordinate w
 })
 
 test_that("weather_convert_units parity and edge cases", {
-  # Temp: 'unknown' units should NOT trigger Kelvin subtraction
-  expect_equal(weather_convert_units(25.0, "unknown", "temp"), 25.0)
+  # Unknown units fail rather than guessing from magnitude
+  expect_error(weather_convert_units(25.0, "unknown", "temp"), "units")
 
   # Temp: 'degK', 'kelvin', 'K' should trigger subtraction
   expect_equal(weather_convert_units(298.15, "degk", "temp"), 25.0, tolerance = 1e-4)
   expect_equal(weather_convert_units(298.15, "kelvin", "temp"), 25.0, tolerance = 1e-4)
 
-  # SRAD: median > 1e4 without units divides by 1e6
-  expect_equal(weather_convert_units(15000000, "", "srad"), 15.0)
+  # Missing radiation units fail explicitly
+  expect_error(weather_convert_units(15000000, "", "srad"), "units")
 
   # SRAD: 'MJ' units preserved
   expect_equal(weather_convert_units(18.5, "MJ m-2 day-1", "srad"), 18.5)
 
   # Wind: 10 m -> 2 m
-  expect_equal(weather_convert_units(4.0, "m s-1", "wind"), 4.0 * 0.748, tolerance = 1e-9)
+  expect_equal(weather_convert_units(4.0, "m s-1", "wind", wind_height_m = 10), 4.0 * 0.748, tolerance = 1e-3)
 
   # Vapour pressure to dewpoint
   td <- weather_convert_units(12.27, "hPa", "vp")

@@ -58,17 +58,16 @@ def test_bidirectional_longitude_wrapping(monkeypatch):
 
 
 def test_convert_units_edge_cases():
-    # Temp: 'unknown' units should NOT trigger Kelvin subtraction
-    t_celsius = convert_units([25.0], "unknown", "temp")
-    assert t_celsius[0] == pytest.approx(25.0)
+    # A magnitude guess cannot establish a unit contract.
+    with pytest.raises(ValueError, match="units"):
+        convert_units([25.0], "unknown", "temp")
 
     # Temp: 'degK', 'kelvin', 'K' should trigger subtraction
     assert convert_units([298.15], "degK", "temp")[0] == pytest.approx(25.0)
     assert convert_units([298.15], "kelvin", "temp")[0] == pytest.approx(25.0)
 
-    # SRAD: median > 1e4 without units divides by 1e6
-    srad = convert_units([15_000_000.0], "", "srad")
-    assert srad[0] == pytest.approx(15.0)
+    with pytest.raises(ValueError, match="units"):
+        convert_units([15_000_000.0], "", "srad")
 
     # SRAD: 'MJ' units preserved
     assert convert_units([18.5], "MJ m-2 day-1", "srad")[0] == pytest.approx(18.5)
