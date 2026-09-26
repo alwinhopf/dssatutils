@@ -32,6 +32,7 @@ test_that("NetCDF extraction handles 0..360 and -180..180 longitude coordinate w
   r0_360 <- terra::rast(nrows = 1, ncols = 1, nlyrs = 1, xmin = 279, xmax = 281,
                         ymin = 24, ymax = 26, crs = "EPSG:4326")
   terra::time(r0_360) <- as.Date("2001-01-01")
+  terra::units(r0_360) <- "mm"
   terra::values(r0_360) <- matrix(5.0, nrow = 1)
   terra::writeRaster(r0_360, path, overwrite = TRUE)
   pts_neg <- terra::vect(data.frame(x = -80, y = 25), geom = c("x", "y"), crs = "EPSG:4326")
@@ -42,6 +43,7 @@ test_that("NetCDF extraction handles 0..360 and -180..180 longitude coordinate w
   r_180 <- terra::rast(nrows = 1, ncols = 1, nlyrs = 1, xmin = -81, xmax = -79,
                        ymin = 24, ymax = 26, crs = "EPSG:4326")
   terra::time(r_180) <- as.Date("2001-01-01")
+  terra::units(r_180) <- "mm"
   terra::values(r_180) <- matrix(7.0, nrow = 1)
   terra::writeRaster(r_180, path, overwrite = TRUE)
   pts_pos <- terra::vect(data.frame(x = 280, y = 25), geom = c("x", "y"), crs = "EPSG:4326")
