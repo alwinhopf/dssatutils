@@ -58,3 +58,45 @@ test_that('parallel R assembly reads complete cached years without credentials o
                         agera5_backend='timeseries',agera5_timeseries_chunk_degrees=.1,cache_only=TRUE)
   expect_true(is_wth_valid(file.path(out,'00000001.WTH'),2002,start_year=2001))
 })
+
+test_that('tiles publish complete histories before advancing and isolate missing years', {
+  for (missing_year in c(FALSE, TRUE)) {
+    work <- tempfile(); dir.create(work)
+    out <- file.path(work, 'weather')
+    points <- data.frame(ID=c('00000001','00000002','00000003'),
+                         LAT=c(40,40,40), LONG=c(-90,-90,-87.6))
+    chunks <- dssatutils:::.agera5_split_timeseries_chunks(points$LAT, points$LONG, 1.2)
+    paths <- list()
+    for (tile in seq_along(chunks)) for (year in 2001:2002) {
+      x <- read.csv(fixture, check.names=FALSE)
+      x$valid_time <- sub('2001', as.character(year), x$valid_time)
+      x$longitude <- points$LONG[chunks[[tile]]$idx[1]]
+      path <- file.path(work, paste0(tile, '-', year, '.csv'))
+      write.csv(x, path, row.names=FALSE)
+      paths[[paste(tile, year)]] <- path
+    }
+    calls <- integer()
+    local_mocked_bindings(.agera5_download_timeseries_job=function(job) {
+      tile <- which(vapply(chunks, function(x) identical(x$area, job$area), logical(1)))
+      if (tile == 2L) {
+        expect_identical(file.exists(file.path(out, '00000001.WTH')), !missing_year)
+        expect_identical(file.exists(file.path(out, '00000002.WTH')), !missing_year)
+      }
+      calls <<- c(calls, tile)
+      if (missing_year && tile == 1L && job$year == 2002L) return(NULL)
+      paths[[paste(tile, job$year)]]
+    }, .package='dssatutils')
+    dssatutils:::.process_weather_agera5_timeseries(points,2001,2002,out,'ID','LAT','LONG',
+                                                  1,NULL,work,agera5_timeseries_chunk_degrees=1.2,
+                                                  cache_only=TRUE)
+    expect_equal(calls, c(1L,1L,2L,2L))
+    expect_true(is_wth_valid(file.path(out,'00000003.WTH'),2002,start_year=2001))
+    if (!missing_year) {
+      expect_true(is_wth_valid(file.path(out,'00000001.WTH'),2002,start_year=2001))
+      expect_equal(readLines(file.path(out,'00000001.WTH'))[-(1:4)],
+                   readLines(file.path(out,'00000003.WTH'))[-(1:4)])
+    }
+    expect_length(list.files(out, pattern='tmp-'), 0)
+    unlink(work, recursive=TRUE)
+  }
+})

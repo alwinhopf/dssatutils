@@ -121,8 +121,17 @@ stores CSVs by year and globally anchored AgERA5 grid chunk. With
 canonical 0.1-degree AgERA5 cell, so crops, soils, point subsets, and model-grid
 resolutions that select the same cell reuse the same download. Larger values
 group cells into fixed global tiles and reduce request count at the cost of more
-downloaded data. The legacy `gridded` backend remains available for callers that
-need the original daily-NetCDF ZIPs.
+downloaded data. Both R and Python process one tile across all requested years,
+write its complete point weather files, and release its assembled data before
+starting the next tile. Download concurrency applies to years within that tile;
+point-history memory therefore scales with points per tile and requested years,
+rather than all points in the study. Existing annual CSV caches, completeness
+checks, and atomic weather-file publication are preserved. A missing year blocks
+publication for affected points while other tiles can still finish. Large tiles
+or long histories can still need substantial memory.
+
+The legacy `gridded` backend remains available for callers that need the original
+daily-NetCDF ZIPs.
 
 ## Versioning
 

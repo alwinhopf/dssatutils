@@ -441,26 +441,16 @@ AGERA5_CDS_REQUEST_CAP <- 4L
                   length(chunks), agera5_data_format, cache_only))
 
   effective_end <- min(as.Date(sprintf("%04d-12-31", end_year)), Sys.Date() - 10)
-  jobs <- list()
-  for (yr in seq.int(as.integer(start_year), end_year)) {
-    if (is.null(.agera5_date_bounds_for_year(yr))) next
-    for (chunk in chunks) {
-      jobs[[length(jobs) + 1L]] <- list(year = yr, area = chunk$area,
-                                       cache_dir = agera5_cache_dir,
-                                       data_format = agera5_data_format,
-                                       chunk = chunk,
-                                       cache_only = isTRUE(cache_only),
-                                       bounds = c(sprintf("%04d-01-01", yr), as.character(min(as.Date(sprintf("%04d-12-31", yr)), effective_end))))
-    }
-  }
+  years <- Filter(function(yr) !is.null(.agera5_date_bounds_for_year(yr)),
+                  seq.int(as.integer(start_year), end_year))
   requested_cores <- suppressWarnings(as.integer(n_cores))
   if (is.na(requested_cores) || requested_cores < 1L) requested_cores <- 1L
-  workers <- min(requested_cores, AGERA5_CDS_REQUEST_CAP, max(1L, length(jobs)))
+  workers <- min(requested_cores, AGERA5_CDS_REQUEST_CAP, max(1L, length(years)))
   message(sprintf(
     "  AgERA5 time-series cache/download phase: %d year-area job(s); using %d concurrent CDS request(s) (cap=%d).",
-    length(jobs), workers, AGERA5_CDS_REQUEST_CAP
+    length(years) * length(chunks), workers, AGERA5_CDS_REQUEST_CAP
   ))
-  if (workers > 1L && length(jobs) > 1L) {
+  if (workers > 1L) {
     cl <- parallel::makeCluster(workers)
     on.exit(parallel::stopCluster(cl), add = TRUE)
     parallel::clusterExport(
@@ -489,94 +479,112 @@ AGERA5_CDS_REQUEST_CAP <- 4L
       library(ecmwfr)
       NULL
     })
-    paths <- parallel::parLapply(cl, jobs, .agera5_download_timeseries_job)
-  } else {
-    paths <- lapply(jobs, .agera5_download_timeseries_job)
   }
-  point_series <- setNames(lapply(ids, function(id)
-    setNames(vector("list", length(.agera5_timeseries_vars)), names(.agera5_timeseries_vars))), ids)
+  process_tile <- function(chunk) {
+    # Function scope releases all-year point data before the next tile.
+    jobs <- lapply(years, function(yr) {
+      list(year = yr, area = chunk$area, cache_dir = agera5_cache_dir,
+           data_format = agera5_data_format, chunk = chunk,
+           cache_only = isTRUE(cache_only),
+           bounds = c(sprintf("%04d-01-01", yr),
+                      as.character(min(as.Date(sprintf("%04d-12-31", yr)), effective_end))))
+    })
+    paths <- if (workers > 1L && length(jobs) > 1L) {
+      parallel::parLapply(cl, jobs, .agera5_download_timeseries_job)
+    } else {
+      lapply(jobs, .agera5_download_timeseries_job)
+    }
+    point_series <- setNames(lapply(ids[chunk$idx], function(id)
+      setNames(vector("list", length(.agera5_timeseries_vars)), names(.agera5_timeseries_vars))), ids[chunk$idx])
 
-  for (k in seq_along(jobs)) {
-    path <- paths[[k]]
-    if (is.null(path) || !file.exists(path)) next
-    tryCatch({
-      df <- .agera5_read_timeseries_csv(path)
-      grids <- unique(df[c("latitude", "longitude")])
-      for (j in jobs[[k]]$chunk$idx) {
-        dist <- (grids$latitude - lats[j])^2 + (grids$longitude - lons[j])^2
-        nearest <- grids[which.min(dist), ]
-        sub <- df[abs(df$latitude - nearest$latitude) < 1e-9 &
-                  abs(df$longitude - nearest$longitude) < 1e-9, ]
-        sub <- sub[order(sub$valid_time), ]
-        for (vname in names(.agera5_timeseries_vars)) {
-          good <- is.finite(sub[[vname]])
-          point_series[[ids[j]]][[vname]] <- c(
-            point_series[[ids[j]]][[vname]],
-            setNames(sub[[vname]][good], sub$DATE[good]))
+    for (k in seq_along(jobs)) {
+      path <- paths[[k]]
+      if (is.null(path) || !file.exists(path)) next
+      tryCatch({
+        df <- .agera5_read_timeseries_csv(path)
+        grids <- unique(df[c("latitude", "longitude")])
+        for (j in jobs[[k]]$chunk$idx) {
+          dist <- (grids$latitude - lats[j])^2 + (grids$longitude - lons[j])^2
+          nearest <- grids[which.min(dist), ]
+          sub <- df[abs(df$latitude - nearest$latitude) < 1e-9 &
+                    abs(df$longitude - nearest$longitude) < 1e-9, ]
+          sub <- sub[order(sub$valid_time), ]
+          for (vname in names(.agera5_timeseries_vars)) {
+            good <- is.finite(sub[[vname]])
+            point_series[[ids[j]]][[vname]] <- c(
+              point_series[[ids[j]]][[vname]],
+              setNames(sub[[vname]][good], sub$DATE[good]))
+          }
         }
-      }
-    }, error = function(e) {
-      msg <- sprintf("  AgERA5 time-series parse failed (%s): %s", path, conditionMessage(e))
-      message(msg)
-      if (!is.null(log_file)) write(msg, file = log_file, append = TRUE)
-    })
+      }, error = function(e) {
+        msg <- sprintf("  AgERA5 time-series parse failed (%s): %s", path, conditionMessage(e))
+        message(msg)
+        if (!is.null(log_file)) write(msg, file = log_file, append = TRUE)
+      })
+    }
+
+    expected_start <- as.Date(sprintf("%04d-01-01", as.integer(start_year)))
+    expected_end <- effective_end
+    all_expected_dates <- seq.Date(expected_start, expected_end, by = "day")
+    all_expected_codes <- sprintf("%d%03d", lubridate::year(all_expected_dates), lubridate::yday(all_expected_dates))
+
+    written <- 0L
+    for (i in chunk$idx) {
+      pid <- ids[i]
+      tryCatch({
+        ps <- point_series[[pid]]
+        if (is.null(ps) || !length(ps$TMAX)) {
+          stop("No AgERA5 time-series data extracted for point.")
+        }
+        extracted_dates <- names(ps$TMAX)
+        missing_dates <- setdiff(all_expected_codes, extracted_dates)
+        if (length(missing_dates) > 0L) {
+          stop(sprintf(
+            "Incomplete time series: missing %d day(s) between %s and %s (first missing: %s, last missing: %s).",
+            length(missing_dates), as.character(expected_start), as.character(expected_end),
+            missing_dates[1], missing_dates[length(missing_dates)]
+          ))
+        }
+        dates <- all_expected_codes
+        get_values <- function(vname) {
+          values <- ps[[vname]]
+          values <- values[!duplicated(names(values), fromLast = TRUE)]
+          as.numeric(values[dates])
+        }
+        wd <- data.frame(DATE = dates, SRAD = get_values("SRAD"), TMAX = get_values("TMAX"),
+                         TMIN = get_values("TMIN"), RAIN = get_values("RAIN"), TDEW = get_values("TDEW"),
+                         RH2M = get_values("RH2M"), WIND = get_values("WIND"))
+        forcing <- as.matrix(wd[, names(.agera5_timeseries_vars), drop = FALSE])
+        if (any(!is.finite(forcing) | forcing == -99)) stop("Incomplete required AgERA5 forcing")
+        parsed <- as.Date(wd$DATE, format = "%Y%j")
+        wd$YEAR <- lubridate::year(parsed); wd$MM <- lubridate::month(parsed)
+
+        staging_file <- basename(tempfile(paste0(pid, ".WTH.tmp-"), tmpdir = output_dir))
+        staging_path <- file.path(output_dir, staging_file)
+        final_path <- file.path(output_dir, sprintf("%s.WTH", pid))
+        if (file.exists(staging_path)) unlink(staging_path)
+
+        .agera5_write_wth(wd, pid, lats[i], lons[i], output_dir, filename = staging_file)
+
+        if (!file.rename(staging_path, final_path)) {
+          unlink(staging_path)
+          stop("Failed to atomically publish weather file.")
+        }
+        written <- written + 1L
+      }, error = function(e) {
+        msg <- sprintf("\n--- ERROR ---\nAgERA5 time-series point %s (%0.3f,%0.3f): %s\n",
+                       ids[i], lats[i], lons[i], conditionMessage(e))
+        cat(msg)
+        if (!is.null(log_file)) write(msg, file = log_file, append = TRUE)
+        if (exists("staging_path") && file.exists(staging_path)) unlink(staging_path)
+      })
+    }
+    written
   }
-
-  expected_start <- as.Date(sprintf("%04d-01-01", as.integer(start_year)))
-  expected_end <- effective_end
-  all_expected_dates <- seq.Date(expected_start, expected_end, by = "day")
-  all_expected_codes <- sprintf("%d%03d", lubridate::year(all_expected_dates), lubridate::yday(all_expected_dates))
-
   written <- 0L
-  for (i in seq_along(ids)) {
-    pid <- ids[i]
-    tryCatch({
-      ps <- point_series[[pid]]
-      if (is.null(ps) || !length(ps$TMAX)) {
-        stop("No AgERA5 time-series data extracted for point.")
-      }
-      extracted_dates <- names(ps$TMAX)
-      missing_dates <- setdiff(all_expected_codes, extracted_dates)
-      if (length(missing_dates) > 0L) {
-        stop(sprintf(
-          "Incomplete time series: missing %d day(s) between %s and %s (first missing: %s, last missing: %s).",
-          length(missing_dates), as.character(expected_start), as.character(expected_end),
-          missing_dates[1], missing_dates[length(missing_dates)]
-        ))
-      }
-      dates <- all_expected_codes
-      get_values <- function(vname) {
-        values <- ps[[vname]]
-        values <- values[!duplicated(names(values), fromLast = TRUE)]
-        as.numeric(values[dates])
-      }
-      wd <- data.frame(DATE = dates, SRAD = get_values("SRAD"), TMAX = get_values("TMAX"),
-                       TMIN = get_values("TMIN"), RAIN = get_values("RAIN"), TDEW = get_values("TDEW"),
-                       RH2M = get_values("RH2M"), WIND = get_values("WIND"))
-      forcing <- as.matrix(wd[, names(.agera5_timeseries_vars), drop = FALSE])
-      if (any(!is.finite(forcing) | forcing == -99)) stop("Incomplete required AgERA5 forcing")
-      parsed <- as.Date(wd$DATE, format = "%Y%j")
-      wd$YEAR <- lubridate::year(parsed); wd$MM <- lubridate::month(parsed)
-
-      staging_file <- basename(tempfile(paste0(pid, ".WTH.tmp-"), tmpdir = output_dir))
-      staging_path <- file.path(output_dir, staging_file)
-      final_path <- file.path(output_dir, sprintf("%s.WTH", pid))
-      if (file.exists(staging_path)) unlink(staging_path)
-
-      .agera5_write_wth(wd, pid, lats[i], lons[i], output_dir, filename = staging_file)
-
-      if (!file.rename(staging_path, final_path)) {
-        unlink(staging_path)
-        stop("Failed to atomically publish weather file.")
-      }
-      written <- written + 1L
-    }, error = function(e) {
-      msg <- sprintf("\n--- ERROR ---\nAgERA5 time-series point %s (%0.3f,%0.3f): %s\n",
-                     ids[i], lats[i], lons[i], conditionMessage(e))
-      cat(msg)
-      if (!is.null(log_file)) write(msg, file = log_file, append = TRUE)
-      if (exists("staging_path") && file.exists(staging_path)) unlink(staging_path)
-    })
+  for (chunk in chunks) {
+    written <- written + process_tile(chunk)
+    invisible(gc())
   }
   message(sprintf("\nAgERA5 time-series processing complete: %d/%d points written to '%s'.\n",
                   written, length(ids), output_dir))

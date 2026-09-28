@@ -155,3 +155,54 @@ def test_python_process_crash_releases_lock(tmp_path):
     assert lock is not None
     ag._agera5_release_lock(lock)
 
+
+
+@pytest.mark.parametrize('workers', [1, 2])
+@pytest.mark.parametrize('missing_year', [False, True])
+def test_tiles_publish_before_next_tile_and_keep_only_local_points(tmp_path, monkeypatch, workers, missing_year):
+    points = pd.DataFrame({'ID': ['00000001', '00000002', '00000003'],
+                           'LAT': [40., 40., 40.], 'LONG': [-90., -90., -87.6]})
+    chunks = ag._split_agera5_timeseries_chunks(points.LAT.to_numpy(), points.LONG.to_numpy(), 1.2)
+    out = tmp_path / 'weather'
+    paths = {}
+    for tile, chunk in enumerate(chunks):
+        for year in (2001, 2002):
+            x = pd.read_csv(FIXTURE)
+            x['valid_time'] = x.valid_time.str.replace('2001', str(year))
+            x['longitude'] = points.LONG.iloc[chunk['idx'][0]]
+            path = tmp_path / f'{tile}-{year}.csv'
+            x.to_csv(path, index=False)
+            paths[(tuple(chunk['area']), year)] = str(path)
+
+    calls = []
+    def download(year, area, *args, **kwargs):
+        tile = next(i for i, c in enumerate(chunks) if tuple(c['area']) == tuple(area))
+        if tile == 1:
+            # No later tile may start before earlier complete points are published.
+            assert (out / '00000001.WTH').exists() == (not missing_year)
+            assert (out / '00000002.WTH').exists() == (not missing_year)
+        calls.append((tile, year))
+        if missing_year and tile == 0 and year == 2002:
+            return None
+        return paths[(tuple(area), year)]
+
+    original_add = ag._add_timeseries_chunk_to_points
+    observed_keys = []
+    def add(path, idx, ids, lats, lons, point_series):
+        observed_keys.append(set(point_series))
+        assert set(point_series) == {ids[i] for i in idx}
+        return original_add(path, idx, ids, lats, lons, point_series)
+
+    monkeypatch.setattr(ag, '_download_agera5_timeseries', download)
+    monkeypatch.setattr(ag, '_add_timeseries_chunk_to_points', add)
+    ag._process_weather_agera5_timeseries(points, 2001, 2002, str(out), 'ID', 'LAT', 'LONG',
+                                         workers, None, str(tmp_path), agera5_timeseries_chunk_degrees=1.2,
+                                         cache_only=True)
+    assert len(calls) == 4
+    assert [tile for tile, _ in calls] == [0, 0, 1, 1]
+    assert observed_keys
+    assert is_wth_valid(out / '00000003.WTH', 2002, start_year=2001)
+    if not missing_year:
+        assert is_wth_valid(out / '00000001.WTH', 2002, start_year=2001)
+        assert (out / '00000001.WTH').read_text().splitlines()[4:] == (out / '00000003.WTH').read_text().splitlines()[4:]
+    assert not list(out.glob('*.tmp-*'))

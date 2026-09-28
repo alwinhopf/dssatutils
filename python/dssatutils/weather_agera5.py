@@ -558,17 +558,16 @@ def _process_weather_agera5_timeseries(
     print("  Backend: sis-agrometeorological-indicators-timeseries "
           f"({len(chunks)} area chunk(s), format={agera5_data_format}, cache_only={cache_only}).")
 
-    point_series = {pid: {v: {} for v in _AGERA5_TIMESERIES_VARS} for pid in ids}
-    jobs = [(year, chunk) for year in range(start_year, end_year + 1)
-            for chunk in chunks if _date_bounds_for_year(year) is not None]
+    years = [year for year in range(start_year, end_year + 1)
+             if _date_bounds_for_year(year) is not None]
 
     try:
         requested_workers = int(n_cores)
     except Exception:  # noqa: BLE001
         requested_workers = 1
-    workers = max(1, min(requested_workers, _AGERA5_CDS_REQUEST_CAP, len(jobs) or 1))
+    workers = max(1, min(requested_workers, _AGERA5_CDS_REQUEST_CAP, len(years) or 1))
     print(
-        f"  AgERA5 time-series cache/download phase: {len(jobs)} year-area job(s); "
+        f"  AgERA5 time-series cache/download phase: {len(years) * len(chunks)} year-area job(s); "
         f"using {workers} concurrent CDS request(s) (cap={_AGERA5_CDS_REQUEST_CAP})."
     )
 
@@ -582,76 +581,88 @@ def _process_weather_agera5_timeseries(
             cache_only=cache_only, bounds=bounds)
         return (year, chunk, path)
 
-    for year, chunk, path in bounded_map(_dl, jobs, workers):
-        if not path:
-            msg = f"  AgERA5 time-series missing ({year}, area={chunk['area']})"
-            print(msg)
-            if log_file:
-                with open(log_file, "a") as lf:
-                    lf.write(msg + "\n")
-            continue
-        try:
-            _add_timeseries_chunk_to_points(path, chunk["idx"], ids, lats, lons, point_series)
-        except Exception as exc:  # noqa: BLE001
-            msg = f"  AgERA5 time-series parse failed ({path}): {exc}"
-            print(msg)
-            if log_file:
-                with open(log_file, "a") as lf:
-                    lf.write(msg + "\n")
+    def process_tile(tile):
+        # Keep all-year point data local to one tile; release it on return.
+        point_series = {ids[i]: {v: {} for v in _AGERA5_TIMESERIES_VARS}
+                        for i in tile["idx"]}
+        tile_jobs = [(year, tile) for year in years]
+        for year, chunk, path in bounded_map(_dl, tile_jobs, workers):
+            if not path:
+                msg = f"  AgERA5 time-series missing ({year}, area={chunk['area']})"
+                print(msg)
+                if log_file:
+                    with open(log_file, "a") as lf:
+                        lf.write(msg + "\n")
+                continue
+            try:
+                _add_timeseries_chunk_to_points(path, chunk["idx"], ids, lats, lons, point_series)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"  AgERA5 time-series parse failed ({path}): {exc}"
+                print(msg)
+                if log_file:
+                    with open(log_file, "a") as lf:
+                        lf.write(msg + "\n")
 
-    expected_start = date(int(start_year), 1, 1)
-    expected_end = effective_end
-    all_expected_codes = []
-    cur = expected_start
-    while cur <= expected_end:
-        all_expected_codes.append(f"{cur.year}{cur.timetuple().tm_yday:03d}")
-        cur += timedelta(days=1)
+        expected_start = date(int(start_year), 1, 1)
+        expected_end = effective_end
+        all_expected_codes = []
+        cur = expected_start
+        while cur <= expected_end:
+            all_expected_codes.append(f"{cur.year}{cur.timetuple().tm_yday:03d}")
+            cur += timedelta(days=1)
+
+        written = 0
+        for i in tile["idx"]:
+            pid, lat, lon = ids[i], lats[i], lons[i]
+            staging_file = f"{pid}.WTH.tmp-{os.getpid()}-{time.time_ns()}"
+            staging_path = os.path.join(output_dir, staging_file)
+            final_path = os.path.join(output_dir, f"{pid}.WTH")
+            try:
+                ps = point_series[pid]
+                if not ps["TMAX"]:
+                    raise ValueError("No AgERA5 time-series data extracted for this point.")
+                missing_codes = [c for c in all_expected_codes if c not in ps["TMAX"]]
+                if missing_codes:
+                    raise ValueError(
+                        f"Incomplete time series: missing {len(missing_codes)} day(s) between {expected_start} and {expected_end} "
+                        f"(first missing: {missing_codes[0]}, last missing: {missing_codes[-1]})."
+                    )
+
+                series = {v: pd.Series([ps[v][d] for d in all_expected_codes], index=all_expected_codes, dtype="float64")
+                          for v in _AGERA5_TIMESERIES_VARS}
+                frame = pd.DataFrame(series)
+                frame.index.name = "DATE"
+                frame = frame.reset_index().sort_values("DATE")
+                dts = pd.to_datetime(frame["DATE"], format="%Y%j")
+                frame["YEAR"] = dts.dt.year
+                frame["MM"] = dts.dt.month
+                forcing = frame[list(_AGERA5_TIMESERIES_VARS)].to_numpy(dtype=float)
+                if (~np.isfinite(forcing) | (forcing == -99)).any():
+                    raise ValueError("Incomplete required AgERA5 forcing")
+
+                if os.path.exists(staging_path):
+                    os.remove(staging_path)
+
+                _write_wth(frame, pid, lat, lon, output_dir, filename=staging_file)
+                os.replace(staging_path, final_path)
+                written += 1
+            except Exception as exc:  # noqa: BLE001
+                msg = f"\n--- ERROR ---\nAgERA5 time-series point {pid} ({lat:.3f},{lon:.3f}): {exc}\n"
+                print(msg)
+                if log_file:
+                    with open(log_file, "a") as lf:
+                        lf.write(msg)
+                if os.path.exists(staging_path):
+                    try:
+                        os.remove(staging_path)
+                    except OSError:
+                        pass
+
+        return written
 
     written = 0
-    for pid, lat, lon in zip(ids, lats, lons):
-        staging_file = f"{pid}.WTH.tmp-{os.getpid()}-{time.time_ns()}"
-        staging_path = os.path.join(output_dir, staging_file)
-        final_path = os.path.join(output_dir, f"{pid}.WTH")
-        try:
-            ps = point_series[pid]
-            if not ps["TMAX"]:
-                raise ValueError("No AgERA5 time-series data extracted for this point.")
-            missing_codes = [c for c in all_expected_codes if c not in ps["TMAX"]]
-            if missing_codes:
-                raise ValueError(
-                    f"Incomplete time series: missing {len(missing_codes)} day(s) between {expected_start} and {expected_end} "
-                    f"(first missing: {missing_codes[0]}, last missing: {missing_codes[-1]})."
-                )
-
-            series = {v: pd.Series([ps[v][d] for d in all_expected_codes], index=all_expected_codes, dtype="float64")
-                      for v in _AGERA5_TIMESERIES_VARS}
-            frame = pd.DataFrame(series)
-            frame.index.name = "DATE"
-            frame = frame.reset_index().sort_values("DATE")
-            dts = pd.to_datetime(frame["DATE"], format="%Y%j")
-            frame["YEAR"] = dts.dt.year
-            frame["MM"] = dts.dt.month
-            forcing = frame[list(_AGERA5_TIMESERIES_VARS)].to_numpy(dtype=float)
-            if (~np.isfinite(forcing) | (forcing == -99)).any():
-                raise ValueError("Incomplete required AgERA5 forcing")
-
-            if os.path.exists(staging_path):
-                os.remove(staging_path)
-
-            _write_wth(frame, pid, lat, lon, output_dir, filename=staging_file)
-            os.replace(staging_path, final_path)
-            written += 1
-        except Exception as exc:  # noqa: BLE001
-            msg = f"\n--- ERROR ---\nAgERA5 time-series point {pid} ({lat:.3f},{lon:.3f}): {exc}\n"
-            print(msg)
-            if log_file:
-                with open(log_file, "a") as lf:
-                    lf.write(msg)
-            if os.path.exists(staging_path):
-                try:
-                    os.remove(staging_path)
-                except OSError:
-                    pass
+    for tile in chunks:
+        written += process_tile(tile)
 
     print(f"\nAgERA5 time-series processing complete: {written}/{len(ids)} points "
           f"written to '{output_dir}'.\n")
