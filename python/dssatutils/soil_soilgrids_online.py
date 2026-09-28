@@ -309,6 +309,7 @@ def process_soils_soilgrids_online(
     soilfile_csv_path: str,
     output_sol_dir: str,
     id_col: str,
+    use_rest_api=None,
 ) -> None:
     """
     Fetch SoilGrids data, compute DSSAT soil physics, write per-point .SOL
@@ -323,6 +324,8 @@ def process_soils_soilgrids_online(
         if USE_REST_API is not None
         else get_config_bool("soil.soilgrids_online.use_rest_api", False)
     )
+    if use_rest_api is not None:
+        use_rest = bool(use_rest_api)
     mode = "REST API" if use_rest else "VRT"
     print(f"--- Starting SoilGrids Extraction (Mode: {mode}) ---")
 

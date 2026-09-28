@@ -86,47 +86,64 @@ def _pick_var(ds, aliases):
     for a in aliases:
         if a in lower:
             return lower[a]
-    for v in ds.data_vars:
-        lv = v.lower()
-        if any(a in lv for a in aliases):
-            return v
-    return next(iter(ds.data_vars), None)
+    matches = [v for v in ds.data_vars if any(a in v.lower() for a in aliases)]
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous weather variable aliases {aliases}: {matches}")
+    return matches[0] if matches else None
 
 
 def _coord_names(ds):
-    lat = next((c for c in ("lat", "latitude", "y") if c in ds.coords), None)
-    lon = next((c for c in ("lon", "longitude", "x") if c in ds.coords), None)
+    lat = next((c for c in ("lat", "latitude") if c in ds.coords), None)
+    lon = next((c for c in ("lon", "longitude") if c in ds.coords), None)
     return lat, lon
 
 
-def convert_units(values, units: str, kind: str):
-    units_l = (units or "").lower().replace("**", "^")
+def convert_units(values, units: str, kind: str, wind_height_m=None):
+    """Convert declared daily-forcing units; reject ambiguous units/height."""
+    u = re.sub(r"[\s_^*]", "", (units or "").lower()).replace("per", "/")
     arr = np.asarray(values, dtype=float)
+    def unsupported():
+        raise ValueError(f"Unsupported or missing {kind} units: {units!r}")
     if kind == "temp":
-        if "k" in units_l or np.nanmedian(arr) > 100:
-            arr = arr - 273.15
-    elif kind == "rain":
-        if "s-1" in units_l or "/s" in units_l:
-            arr = arr * 86400.0
-    elif kind == "srad":
-        if "w" in units_l and "m" in units_l:
-            arr = arr * 0.0864
-        elif "j" in units_l and "m" in units_l:
-            arr = arr / 1_000_000.0
-    elif kind == "wind":
-        # Reanalysis/gridded wind is reported at 10 m; DSSAT wants 2 m.
-        # FAO-56 log-profile factor u2 = u10 * 4.87 / ln(67.8*10 - 5.42) ~ 0.748.
-        arr = arr * 0.748
-    elif kind == "vp":
-        # Vapour pressure (hPa) -> dewpoint (degC) via the inverse Magnus formula.
-        e = np.clip(arr, 1e-3, None)
+        if u in {"k", "kelvin", "degk", "degreek", "degreeskelvin"}:
+            return arr - 273.15
+        if u in {"c", "degc", "celsius", "degreecelsius", "degreescelsius", "°c"}:
+            return arr
+        unsupported()
+    if kind == "rain":
+        if u in {"mm", "mm/day", "mmday-1", "mmd-1", "kgm-2", "kg/m2"}: return arr
+        if u in {"kgm-2s-1", "kg/m2/s", "mms-1", "mm/s"}: return arr * 86400
+        if u in {"m", "m/day", "mday-1"}: return arr * 1000
+        unsupported()
+    if kind == "srad":
+        if u in {"wm-2", "w/m2"}: return arr * 0.0864
+        for prefix, scale in (("mj", 1.0), ("kj", 0.001), ("j", 1e-6)):
+            if u in {prefix + tail for tail in ("m-2", "/m2", "m-2day-1", "m-2d-1", "/m2/day", "m-2/day")}:
+                return arr * scale
+        unsupported()
+    if kind == "wind":
+        if u in {"km/h", "kmh-1"}: arr = arr / 3.6
+        elif u not in {"m/s", "ms-1"}: unsupported()
+        if wind_height_m is None or not np.isfinite(float(wind_height_m)) or float(wind_height_m) < 0.1:
+            raise ValueError("Wind requires an explicit height_m in metres")
+        h = float(wind_height_m)
+        return arr if h == 2 else arr * np.log(67.8 * 2 - 5.42) / np.log(67.8 * h - 5.42)
+    if kind == "vp":
+        if u == "pa": arr = arr / 100
+        elif u == "kpa": arr = arr * 10
+        elif u not in {"hpa", "mbar"}: unsupported()
+        e = np.where(arr > 0, arr, np.nan)
         ln = np.log(e / 6.1094)
-        arr = (243.04 * ln) / (17.625 - ln)
+        return (243.04 * ln) / (17.625 - ln)
+    if kind in {"rh", "rh2m"}:
+        if u in {"1", "fraction"}: return arr * 100
+        if u in {"%", "percent", "percentage"}: return arr
+        unsupported()
     return arr
 
 
 def extract_netcdf_series(path, aliases, ids, lats, lons,
-                          start_year: int, end_year: int, kind: str) -> dict:
+                          start_year: int, end_year: int, kind: str, wind_height_m=None) -> dict:
     import xarray as xr
 
     out = {pid: {} for pid in ids}
@@ -135,10 +152,27 @@ def extract_netcdf_series(path, aliases, ids, lats, lons,
     try:
         ds = xr.concat(datasets, dim="time").sortby("time") if len(datasets) > 1 else datasets[0]
         var = _pick_var(ds, aliases)
+        if var is None:
+            raise KeyError(
+                f"No matching variable for aliases {aliases} found in dataset. "
+                f"Available variables: {list(ds.data_vars)}"
+            )
         latname, lonname = _coord_names(ds)
-        if var is None or latname is None or lonname is None or "time" not in ds.coords:
-            return out
+        if latname is None or lonname is None or "time" not in ds.coords:
+            raise ValueError(
+                f"Dataset missing required coordinates (lat, lon, time). Found: {list(ds.coords)}"
+            )
         da = ds[var]
+        for coordinate, accepted in ((latname, {"degrees_north", "degree_north", "degrees_n", "degree_n"}),
+                                     (lonname, {"degrees_east", "degree_east", "degrees_e", "degree_e"})):
+            axis = ds[coordinate]
+            axis_units = str(axis.attrs.get("units", "")).lower()
+            if axis.ndim != 1 or (axis_units and axis_units not in accepted):
+                raise ValueError("Weather coordinates must be one-dimensional geographic degrees")
+        if da.attrs.get("grid_mapping"):
+            mapping = ds.get(da.attrs["grid_mapping"])
+            if mapping is not None and mapping.attrs.get("grid_mapping_name", "latitude_longitude") != "latitude_longitude":
+                raise ValueError("Projected weather grids must be reprojected to geographic latitude/longitude")
         units = str(da.attrs.get("units", ""))
         times = pd.to_datetime(ds["time"].values)
         keep = (times.year >= start_year) & (times.year <= end_year)
@@ -146,10 +180,32 @@ def extract_netcdf_series(path, aliases, ids, lats, lons,
             return out
         da = da.isel(time=np.where(keep)[0])
         times = times[keep]
-        qlons = np.asarray(lons, dtype=float)
+        # These adapters consume daily forcing. Without interval bounds and
+        # accumulation metadata, subdaily integration is ambiguous.
+        if times.has_duplicates:
+            raise ValueError("Duplicate weather timestamps; remove overlapping records before extraction")
+        if times.normalize().has_duplicates:
+            raise ValueError("Subdaily weather data is unsupported; provide one daily record per date")
+        qlons = np.asarray(lons, dtype=float).copy()
         grid_lons = np.asarray(ds[lonname].values, dtype=float)
-        if np.nanmin(grid_lons) >= 0 and np.nanmax(qlons) <= 180:
+        grid_lats = np.asarray(ds[latname].values, dtype=float)
+        if np.nanmin(grid_lons) >= 0:
             qlons = np.where(qlons < 0, qlons + 360, qlons)
+        elif np.nanmax(grid_lons) <= 180:
+            qlons = np.where(qlons > 180, qlons - 360, qlons)
+
+        min_lat, max_lat = float(np.nanmin(grid_lats)), float(np.nanmax(grid_lats))
+        min_lon, max_lon = float(np.nanmin(grid_lons)), float(np.nanmax(grid_lons))
+        lat_res = 0.0
+        lon_res = 0.0
+        for lat_val, lon_val, pid in zip(lats, qlons, ids):
+            if not (min_lat - lat_res <= lat_val <= max_lat + lat_res) or \
+               not (min_lon - lon_res <= lon_val <= max_lon + lon_res):
+                raise ValueError(
+                    f"Point {pid} ({lat_val:.4f}, {lon_val:.4f}) is outside grid domain: "
+                    f"lat [{min_lat:.4f}, {max_lat:.4f}], lon [{min_lon:.4f}, {max_lon:.4f}]"
+                )
+
         pts_lat = xr.DataArray(np.asarray(lats, dtype=float), dims="points")
         pts_lon = xr.DataArray(qlons, dims="points")
         sel = da.sel({latname: pts_lat, lonname: pts_lon}, method="nearest")
@@ -158,7 +214,8 @@ def extract_netcdf_series(path, aliases, ids, lats, lons,
             vals = vals.reshape(len(times), 1)
         elif vals.shape[0] != len(times):
             vals = vals.T
-        vals = convert_units(vals, units, kind)
+        height = wind_height_m if wind_height_m is not None else da.attrs.get("height_m", da.attrs.get("height"))
+        vals = convert_units(vals, units, kind, wind_height_m=height)
         date_codes = [f"{t.year}{t.dayofyear:03d}" for t in times]
         for j, pid in enumerate(ids):
             col = vals[:, j]
@@ -198,7 +255,7 @@ def process_local_netcdf_weather(shapefile, start_year, end_year, output_dir,
             continue
         per_var[dssat_var] = extract_netcdf_series(
             paths, spec.get("aliases", spec["tokens"]), ids, lats, lons,
-            start_year, end_year, spec["kind"])
+            start_year, end_year, spec["kind"], wind_height_m=spec.get("height_m"))
 
     for required in ("TMAX", "TMIN", "RAIN", "SRAD"):
         if required not in per_var:

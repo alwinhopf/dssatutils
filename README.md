@@ -282,3 +282,18 @@ to avoid evaluating newer union syntax during Python 3.9 imports. This is a
 Python compatibility detail with no R/Python behavioral divergence. R AgERA5 and
 ERA5-Land conversion tests mock credential setup as well as downloads, so they
 require neither CDS secrets nor a developer keyring.
+
+## Daily NetCDF input contract
+
+Generic gridded adapters require declared units and geographic, one-dimensional
+latitude/longitude coordinates. Points outside the coordinate-centre domain,
+projected grids, ambiguous variables, duplicate dates and subdaily records are
+rejected. Reproject and aggregate upstream with the variable's physical semantics.
+Radiation accepts J/kJ/MJ per square metre per daily record or daily-mean W/m²;
+unknown units are errors. Vapour pressure accepts Pa/hPa/kPa/mbar. Wind must
+declare its measurement height via the variable attribute `height_m` (metres)
+or the adapter variable specification; m/s and km/h are supported and converted
+to the WTH 2 m reference height. Already-MJ radiation is never rescaled.
+
+SoilGrids online accepts `use_rest_api` explicitly in R and Python; an explicit
+argument takes precedence over the legacy global/configuration default.

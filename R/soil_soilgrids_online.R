@@ -301,13 +301,14 @@ fetch_soilgrids_vrt <- function(gridfile, id_col) {
 # ==============================================================================
 #  5. MAIN PIPELINE FUNCTION (WITH ERROR LOGGING)
 # ==============================================================================
-process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_sol_dir, id_col) {
+process_soils_soilgrids_online <- function(gridfile, soilfile_csv_path, output_sol_dir, id_col, use_rest_api = NULL) {
   
   use_rest <- if(exists("USE_REST_API", envir = globalenv())) {
     get("USE_REST_API", envir = globalenv())
   } else {
     .dssatutils_config_bool("soil.soilgrids_online.use_rest_api", FALSE)
   }
+  if (!is.null(use_rest_api)) use_rest <- isTRUE(use_rest_api)
   message(sprintf("--- Starting SoilGrids Extraction (Mode: %s) ---", ifelse(use_rest, "REST API", "VRT")))
   
   if (!inherits(gridfile, "sf")) stop("gridfile must be an sf object")

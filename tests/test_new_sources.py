@@ -10,6 +10,8 @@
 # Run:  python -m pytest tests/test_new_sources.py     (or python tests/test_new_sources.py)
 # ---------------------------------------------------------------------------
 
+from __future__ import annotations
+
 import math
 import os
 import sys
@@ -424,7 +426,7 @@ def test_gridded_weather_writer_and_unit_helpers():
 def test_convert_units_wind_and_vapour_pressure():
     from dssatutils import weather_gridded_common as g
     # 10 m -> 2 m wind (FAO-56 log profile factor 0.748).
-    assert abs(g.convert_units(np.array([4.0]), "m s-1", "wind")[0] - 4.0 * 0.748) < 1e-9
+    assert abs(g.convert_units(np.array([4.0]), "m s-1", "wind", wind_height_m=10)[0] - 4.0 * 0.748) < 1e-3
     # Vapour pressure ~12.27 hPa -> dewpoint near 10 C (inverse Magnus).
     td = g.convert_units(np.array([12.27]), "hPa", "vp")[0]
     assert abs(td - 10.0) < 0.5, f"vp->dewpoint off: {td}"
