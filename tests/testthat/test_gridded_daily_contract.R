@@ -72,3 +72,15 @@ test_that("weather_convert_units parity and edge cases", {
   td <- weather_convert_units(12.27, "hPa", "vp")
   expect_true(abs(td - 10.0) < 0.5)
 })
+
+
+test_that("GridMET AMP is the full mean annual temperature range", {
+  dates <- seq(as.Date("2001-01-01"), as.Date("2002-12-31"), by = "day")
+  tmean <- as.numeric(format(dates, "%m"))
+  wth <- data.frame(DATE = dates, TMAX = tmean + 5, TMIN = tmean - 5)
+  expect_equal(dssatutils:::.gridmet_calc_amp(wth), 11)
+  tmean[format(dates, "%Y") == "2002"] <- 13 - tmean[format(dates, "%Y") == "2002"]
+  wth$TMAX <- tmean + 5
+  wth$TMIN <- tmean - 5
+  expect_equal(dssatutils:::.gridmet_calc_amp(wth), 11)
+})

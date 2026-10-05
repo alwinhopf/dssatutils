@@ -135,7 +135,7 @@ test_that("process_weather_daymet runs successfully with mocks", {
   dir.create(work_dir)
   on.exit(unlink(work_dir, recursive = TRUE))
   
-  shapefile <- data.frame(ID = "TEST1", LAT = 40.0, LONG = -90.0)
+  shapefile <- data.frame(ID = "TEST1", LAT = 30.8166, LONG = -100.0723)
   log_file <- file.path(work_dir, "error.log")
   
   local_mocked_bindings(
@@ -169,6 +169,9 @@ test_that("process_weather_daymet runs successfully with mocks", {
   )
   
   assert_wth_valid(file.path(work_dir, "TEST1.WTH"))
+  station <- readLines(file.path(work_dir, "TEST1.WTH"))[3]
+  expect_equal(as.numeric(substr(station, 8, 15)), 30.8166)
+  expect_equal(as.numeric(substr(station, 17, 25)), -100.0723)
 })
 
 test_that("process_weather_nasapower_chirps runs successfully with mocks", {

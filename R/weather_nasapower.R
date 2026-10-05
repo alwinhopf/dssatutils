@@ -123,8 +123,8 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
       
       # Format and write the .WTH file
       wth_header <- sprintf(
-        #"$WEATHER DATA: NASA-POWER (Point ID: %s)\n@ INSI      LAT     LONG  ELEV  TAV  AMP REFHT WNDHT\n  NASA %8.4f %8.4f  -99 %5.1f %5.1f   2.0   2.0\n@ DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
-        "$WEATHER DATA: NASA-POWER (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  NASA %8.4f %8.4f   -99 %5.1f %5.1f   2.0   2.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+        #"$WEATHER DATA: NASA-POWER (Point ID: %s)\n@ INSI      LAT     LONG  ELEV  TAV  AMP REFHT WNDHT\n  NASA %8.4f %9.4f  -99 %5.1f %5.1f   2.0   2.0\n@ DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+        "$WEATHER DATA: NASA-POWER (Point ID: %s)\n@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n  NASA %8.4f %9.4f   -99 %5.1f %5.1f   2.0   2.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
         point_id, latitude, longitude, tav, amp
       )
       
@@ -132,12 +132,13 @@ process_weather_nasapower <- function(shapefile, start_year, end_year, output_di
       # <=-999.95) and shift every downstream column. Defined locally so it is
       # always visible inside the parallel worker. Almost always a corrupt source
       # value -> write the DSSAT missing indicator (-99) instead of a broken row.
+      # DSSAT WIND is km/day; provider winds are m/s, converted at serialization.
       clamp_wth <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
       weather_lines <- with(weather_data, {
         sprintf(
           "%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
           DATE, clamp_wth(SRAD), clamp_wth(TMAX), clamp_wth(TMIN),
-          clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(WIND)
+          clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(ifelse(WIND >= 0, WIND * 86.4, WIND))
         )
       })
       

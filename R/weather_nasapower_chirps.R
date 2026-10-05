@@ -197,17 +197,18 @@ process_weather_nasapower_chirps <- function(shapefile, start_year, end_year,
       amp <- mean(annual_amps$AMP_YR, na.rm = TRUE)
 
       wth_header <- sprintf(
-        "$WEATHER DATA: NASA-POWER + CHIRPS rain (Point ID: %s) [%s]\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  NAPC %8.4f %8.4f   -99 %5.1f %5.1f   2.0   2.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+        "$WEATHER DATA: NASA-POWER + CHIRPS rain (Point ID: %s) [%s]\n@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n  NAPC %8.4f %9.4f   -99 %5.1f %5.1f   2.0   2.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
         point_id, rain_src, latitude, longitude, tav, amp)
 
       # Guard against values that would overflow a %6.1f field and shift every
       # downstream column (see weather_nasapower.R). Local so it is visible in
       # the parallel worker; corrupt readings become the DSSAT missing value.
+      # DSSAT WIND is km/day; provider winds are m/s, converted at serialization.
       clamp_wth <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
       weather_lines <- with(weather_data, sprintf(
         "%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
         DATE, clamp_wth(SRAD), clamp_wth(TMAX), clamp_wth(TMIN),
-        clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(WIND)))
+        clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(ifelse(WIND >= 0, WIND * 86.4, WIND))))
       weather_lines <- gsub("-99.0", "  -99", weather_lines, fixed = TRUE)
       writeLines(c(wth_header, weather_lines), con = output_file)
 

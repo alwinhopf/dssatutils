@@ -214,18 +214,19 @@ def _process_single_point(args: dict) -> None:
         header = (
             f"$WEATHER DATA: NASA-POWER + CHIRPS rain (Point ID: {pid}) "
             f"[{rain_source}]\n"
-            f"@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n"
-            f"  NAPC {lat:8.4f} {lon:8.4f}   -99 {tav:5.1f} {amp:5.1f}   2.0   2.0\n"
+            f"@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n"
+            f"  NAPC {lat:8.4f} {lon:9.4f}   -99 {tav:5.1f} {amp:5.1f}   2.0   2.0\n"
             f"@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND"
         )
 
+        # DSSAT WIND is wind run (km/day); provider winds are m/s.
         lines = []
         for _, row in df.iterrows():
             line = (
                 f"{row['DATE']:>7s}"
                 f"{row['SRAD']:6.1f}{row['TMAX']:6.1f}{row['TMIN']:6.1f}"
                 f"{row['RAIN']:6.1f}{row['TDEW']:6.1f}{row['RH2M']:6.1f}"
-                f"{row['WIND']:6.1f}"
+                f"{(row['WIND'] * 86.4 if row['WIND'] >= 0 else row['WIND']):6.1f}"
             )
             line = line.replace(" -99.0", "   -99")
             lines.append(line)

@@ -407,15 +407,21 @@ AGERA5_CDS_REQUEST_CAP <- 4L
   if (!is.finite(tav) || !is.finite(amp)) stop("No valid AgERA5 temperature climatology for point.")
 
   hdr <- sprintf(
-    "$WEATHER DATA: AgERA5 (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  AGE5 %8.4f %8.4f   -99 %5.1f %5.1f   2.0  10.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+    "$WEATHER DATA: AgERA5 (Point ID: %s)\n@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n  AGE5 %8.4f %9.4f   -99 %5.1f %5.1f   2.0  10.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
     pid, lat, lon, tav, amp)
   clamp_wth <- function(x) {
     x[is.na(x) | x >= 9999.95 | x <= -999.95] <- -99
     x
   }
-  lines <- with(wd, sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                            DATE, clamp_wth(SRAD), clamp_wth(TMAX), clamp_wth(TMIN),
-                            clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(WIND)))
+  # DSSAT WIND is km/day; provider winds are m/s, converted at serialization.
+  # Preserve precision when one-decimal rounding creates a zero-temperature pair.
+  near_zero <- is.finite(wd$TMAX) & is.finite(wd$TMIN) &
+    abs(wd$TMAX) < 0.05 & abs(wd$TMIN) < 0.05
+  temperature_format <- ifelse(near_zero, "%6.2f", "%6.1f")
+  lines <- with(wd, sprintf("%7s%6.1f%s%s%6.1f%6.1f%6.1f%6.1f",
+                            DATE, clamp_wth(SRAD), sprintf(temperature_format, clamp_wth(TMAX)),
+                            sprintf(temperature_format, clamp_wth(TMIN)),
+                            clamp_wth(RAIN), clamp_wth(TDEW), clamp_wth(RH2M), clamp_wth(ifelse(WIND >= 0, WIND * 86.4, WIND))))
   lines <- gsub("-99.0", "  -99", lines, fixed = TRUE)
   out <- file.path(output_dir, filename)
   writeLines(c(hdr, lines), con = out)

@@ -835,7 +835,7 @@ audit_weather_file_quality <- function(wth_file,
     list("rain_extreme", "warning", is.finite(dat$RAIN) & dat$RAIN > 500, "RAIN>500mm"),
     list("srad_out_of_range", "warning", is.finite(dat$SRAD) & (dat$SRAD < 0 | dat$SRAD > 40), "bounds=0..40MJ/m2/day"),
     list("rh2m_out_of_range", "warning", is.finite(dat$RH2M) & (dat$RH2M < 0 | dat$RH2M > 100), "bounds=0..100%"),
-    list("wind_out_of_range", "warning", is.finite(dat$WIND) & (dat$WIND < 0 | dat$WIND > 75), "bounds=0..75m/s"),
+    list("wind_out_of_range", "warning", is.finite(dat$WIND) & (dat$WIND < 0 | dat$WIND > 6480), "bounds=0..6480km/day (75m/s)"),
     list("tdew_gt_tmax", "warning", is.finite(dat$TDEW) & is.finite(dat$TMAX) & dat$TDEW > dat$TMAX, "")
   )
   for (chk in checks) {

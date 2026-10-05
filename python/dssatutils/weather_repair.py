@@ -884,7 +884,7 @@ def audit_weather_file_quality(
         ("rain_extreme", "warning", np.isfinite(rain) & (rain > 500), "RAIN>500mm"),
         ("srad_out_of_range", "warning", np.isfinite(srad) & ((srad < 0) | (srad > 40)), "bounds=0..40MJ/m2/day"),
         ("rh2m_out_of_range", "warning", np.isfinite(rh) & ((rh < 0) | (rh > 100)), "bounds=0..100%"),
-        ("wind_out_of_range", "warning", np.isfinite(wind) & ((wind < 0) | (wind > 75)), "bounds=0..75m/s"),
+        ("wind_out_of_range", "warning", np.isfinite(wind) & ((wind < 0) | (wind > 6480)), "bounds=0..6480km/day (75m/s)"),
         ("tdew_gt_tmax", "warning", np.isfinite(tdew) & np.isfinite(tmax) & (tdew > tmax), ""),
     ]
     for issue, severity, mask, details in checks:

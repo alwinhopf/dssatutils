@@ -1,5 +1,6 @@
 library(testthat)
 
+
 write_sample_wth <- function(path, rows) {
   writeLines(c(
     "$WEATHER DATA: test",
@@ -9,6 +10,14 @@ write_sample_wth <- function(path, rows) {
     rows
   ), path)
 }
+
+test_that("wind validation uses DSSAT kilometres per day", {
+  path <- tempfile(fileext = ".WTH")
+  write_sample_wth(path, "2024001 12.0 10.0 1.0 0.0 0.0 40.0 1000.0")
+  expect_true(is_wth_valid(path, end_date = "2024-01-01"))
+  write_sample_wth(path, "2024001 12.0 10.0 1.0 0.0 0.0 40.0 9000.0")
+  expect_false(is_wth_valid(path, end_date = "2024-01-01"))
+})
 
 test_that("fixed-width adjacent negative weather values are valid", {
   path <- tempfile(fileext = ".WTH")
@@ -82,4 +91,28 @@ test_that("AgERA5 writer defers physical validation to the shared validator", {
     end_year = 2018,
     required_columns = c("SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND")
   ))
+})
+
+
+test_that("AgERA5 writes wind run and preserves missing sentinel", {
+  wd <- data.frame(DATE = c("2018001", "2018002"), YEAR = 2018, MM = 1,
+                   SRAD = 12, TMAX = 10, TMIN = 2, RAIN = 0,
+                   TDEW = 0, RH2M = 60, WIND = c(3, -99))
+  writer <- getFromNamespace(".agera5_write_wth", "dssatutils")
+  generated <- writer(wd, "WIND", 30, -87, tempdir())
+  lines <- readLines(generated)
+  lines <- lines[grepl("^[0-9]{7}", lines)]
+  expect_equal(as.numeric(substr(lines, 44, 49)), c(259.2, -99))
+  expect_true(is_wth_valid(generated, end_date = "2018-01-02"))
+})
+
+test_that("AgERA5 preserves nonzero temperatures near freezing", {
+  wd <- data.frame(DATE = c("2007361", "2007362", "2007363"), YEAR = 2007, MM = 12,
+                   SRAD = 3.3, TMAX = c(0.0432, 0, 2.12), TMIN = c(0.03686, 0, -1.21),
+                   RAIN = 2.2, TDEW = -3.7, RH2M = 76.4, WIND = 2.8)
+  writer <- getFromNamespace(".agera5_write_wth", "dssatutils")
+  lines <- tail(readLines(writer(wd, "PREC", 36.52579, -98.254504, tempdir())), 3)
+  expect_equal(nchar(lines), rep(49L, 3))
+  expect_equal(as.numeric(substr(lines, 14, 19)), c(0.04, 0, 2.1))
+  expect_equal(as.numeric(substr(lines, 20, 25)), c(0.04, 0, -1.2))
 })

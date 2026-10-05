@@ -28,6 +28,28 @@ def test_fixed_width_adjacent_negative_values_are_valid(tmp_path):
     assert is_wth_valid(path, end_date="2024-01-02")
 
 
+def test_wind_validation_uses_dssat_kilometres_per_day(tmp_path):
+    path = tmp_path / "WIND.WTH"
+    _write_sample(path, ["2024001 12.0 10.0 1.0 0.0 0.0 40.0 1000.0"])
+    assert is_wth_valid(path, end_date="2024-01-01")
+    _write_sample(path, ["2024001 12.0 10.0 1.0 0.0 0.0 40.0 9000.0"])
+    assert not is_wth_valid(path, end_date="2024-01-01")
+
+
+def test_agera5_wind_units_and_missing_sentinel(tmp_path):
+    frame = pd.DataFrame({
+        "DATE": ["2018001", "2018002"], "YEAR": [2018, 2018], "MM": [1, 1],
+        "SRAD": [12., 12.], "TMAX": [10., 10.], "TMIN": [2., 2.],
+        "RAIN": [0., 0.], "TDEW": [0., 0.], "RH2M": [60., 60.],
+        "WIND": [3., -99.],
+    })
+    path = Path(_write_wth(frame, "WIND", 30., -87., str(tmp_path)))
+    values = [float(line[43:49]) for line in path.read_text().splitlines()
+              if line[:7].isdigit()]
+    assert values == [259.2, -99.]
+    assert is_wth_valid(path, end_date="2018-01-02")
+
+
 def test_weather_validator_rejects_date_gaps(tmp_path):
     path = tmp_path / "TEST.WTH"
     _write_sample(path, [
@@ -86,6 +108,20 @@ def test_agera5_writer_defers_physical_validation_to_shared_validator(tmp_path):
         end_year=2018,
         required_columns=("SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND"),
     )
+
+
+def test_agera5_preserves_nonzero_temperatures_near_freezing(tmp_path):
+    frame = pd.DataFrame({
+        'DATE': ['2007361', '2007362', '2007363'], 'YEAR': 2007, 'MM': 12,
+        'SRAD': 3.3, 'TMAX': [0.0432, 0.0, 2.12],
+        'TMIN': [0.03686, 0.0, -1.21], 'RAIN': 2.2,
+        'TDEW': -3.7, 'RH2M': 76.4, 'WIND': 2.8,
+    })
+    path = Path(_write_wth(frame, 'TEST', 36.52579, -98.254504, str(tmp_path)))
+    lines = path.read_text().splitlines()[-3:]
+    assert [len(line) for line in lines] == [49, 49, 49]
+    assert [(float(l[13:19]), float(l[19:25])) for l in lines] == [
+        (0.04, 0.04), (0.0, 0.0), (2.1, -1.2)]
 
 
 def test_nasa_power_normalizes_json_null_to_numeric_missing(monkeypatch):

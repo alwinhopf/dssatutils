@@ -66,7 +66,7 @@ def is_wth_valid(path: str | Path, end_year: int | None = None,
             return False
         columns = list(zip(*(item[1] for item in parsed)))
         ranges = ((0, 60), (-90, 70), (-90, 70), (0, 2000),
-                  (-100, 70), (0, 100), (0, 100))
+                  (-100, 70), (0, 100), (0, 8640)) # WIND: km/day (100 m/s)
         for values, (lower, upper) in zip(columns, ranges):
             observed = [value for value in values if not math.isclose(value, -99.0)]
             if any(value < lower or value > upper for value in observed):

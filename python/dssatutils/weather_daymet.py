@@ -157,10 +157,11 @@ def _process_single_point(args: dict) -> None:
         raw = raw.sort_values(["year", "yday"]).reset_index(drop=True)
 
         # --- Write WTH file ---
+        # Match header boundaries: LAT ends at column 15, LONG at column 25.
         header = (
             f"$WEATHER DATA: DayMet Data (Point ID: {pid})\n"
-            f"@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n"
-            f" DMET  {lat:8.4f} {lon:8.4f}   -99 {tav:5.1f} {amp:5.1f}   -99   -99\n"
+            f"@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n"
+            f" DMET  {lat:8.4f} {lon:9.4f}   -99 {tav:5.1f} {amp:5.1f}   -99   -99\n"
             f"@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND"
         )
 

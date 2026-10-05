@@ -101,7 +101,7 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
       
       # Format and write the .WTH file
       wth_header <- sprintf(
-        "$WEATHER DATA: DayMet Data (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  DMET  %8.4f %8.4f   -99 %5.1f %5.1f   -99   -99\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+        "$WEATHER DATA: DayMet Data (Point ID: %s)\n@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n DMET  %8.4f %9.4f   -99 %5.1f %5.1f   -99   -99\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
         point_id, latitude, longitude, tav, amp
       )
       

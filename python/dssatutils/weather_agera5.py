@@ -686,17 +686,22 @@ def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
         raise ValueError("No valid AgERA5 temperature climatology for point.")
     header = (
         f"$WEATHER DATA: AgERA5 (Point ID: {pid})\n"
-        f"@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n"
-        f"  AGE5 {lat:8.4f} {lon:8.4f}   -99 {tav:5.1f} {amp:5.1f}   2.0  10.0\n"
+        f"@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n"
+        f"  AGE5 {lat:8.4f} {lon:9.4f}   -99 {tav:5.1f} {amp:5.1f}   2.0  10.0\n"
         f"@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND"
     )
+    # DSSAT WIND is wind run (km/day); provider winds are m/s.
     lines = []
     for _, row in df.iterrows():
+        # Preserve source precision when normal rounding would create a pair
+        # of zero temperatures, which DSSAT treats as missing weather.
+        near_zero = abs(row['TMAX']) < 0.05 and abs(row['TMIN']) < 0.05
+        decimals = 2 if near_zero else 1
         line = (
             f"{row['DATE']:>7s}"
-            f"{row['SRAD']:6.1f}{row['TMAX']:6.1f}{row['TMIN']:6.1f}"
+            f"{row['SRAD']:6.1f}{row['TMAX']:6.{decimals}f}{row['TMIN']:6.{decimals}f}"
             f"{row['RAIN']:6.1f}{row['TDEW']:6.1f}{row['RH2M']:6.1f}"
-            f"{row['WIND']:6.1f}"
+            f"{(row['WIND'] * 86.4 if row['WIND'] >= 0 else row['WIND']):6.1f}"
         )
         line = line.replace(" -99.0", "   -99")
         lines.append(line)

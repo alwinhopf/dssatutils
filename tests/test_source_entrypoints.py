@@ -454,17 +454,23 @@ def test_process_weather_nasapower_entrypoint(tmp_path):
     _assert_wth(out_dir / "SRC1.WTH")
 
 
-def test_process_weather_daymet_entrypoint(tmp_path):
+@pytest.mark.parametrize("longitude", [-87.0797, -100.0723, -179.9999])
+def test_process_weather_daymet_entrypoint(tmp_path, longitude):
     from dssatutils import process_weather_daymet
 
     with patch("dssatutils.weather_daymet._download_daymet", return_value=_daymet_frame()), \
             patch("dssatutils.weather_daymet.ProcessPoolExecutor", InlineExecutor):
         out_dir = tmp_path / "wth"
         process_weather_daymet(
-            POINTS, YEAR, YEAR, str(out_dir), "ID", "LAT", "LONG", 1,
+            pd.DataFrame({"ID": ["SRC1"], "LAT": [30.8166], "LONG": [longitude]}), YEAR, YEAR, str(out_dir), "ID", "LAT", "LONG", 1,
             str(tmp_path / "daymet.log"),
         )
     _assert_wth(out_dir / "SRC1.WTH")
+
+    station = (out_dir / "SRC1.WTH").read_text().splitlines()[2]
+    assert float(station[7:15]) == 30.8166
+    assert float(station[16:25]) == longitude
+    assert float(station[26:31]) == -99
 
 
 RASTER_SOIL_SOURCES = [

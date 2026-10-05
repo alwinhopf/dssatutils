@@ -35,3 +35,7 @@ weather_cache/
 .cdsapirc
 *.cdsapirc
 .env
+
+fast-tests.log
+r-tests.log
+test-results.xml

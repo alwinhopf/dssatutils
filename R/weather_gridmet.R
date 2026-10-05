@@ -1,3 +1,13 @@
+.gridmet_calc_amp <- function(wth) {
+  # DSSAT STEMP divides TAMP by two internally: write the full annual range.
+  d <- data.frame(year = as.integer(format(wth$DATE, "%Y")),
+                  month = as.integer(format(wth$DATE, "%m")),
+                  tavg = (wth$TMAX + wth$TMIN) / 2)
+  monthly <- aggregate(tavg ~ year + month, d, mean)
+  annual <- aggregate(tavg ~ year, monthly, function(x) max(x) - min(x))
+  mean(annual$tavg)
+}
+
 # File: weather_gridmet_serial.R
 # "CHUNKED SERIAL" VERSION
 # Optimized for >10,000 points. 
@@ -229,11 +239,11 @@ process_weather_gridmet <- function(shapefile, start_year, end_year, output_dir,
         wth_data$WIND <- -99
         
         tav <- DSSAT::calc_TAV(wth_data)
-        amp <- DSSAT::calc_AMP(wth_data)
+        amp <- .gridmet_calc_amp(wth_data)
         wth_data$DATE_FMT <- sprintf("%d%03d", lubridate::year(wth_data$DATE), lubridate::yday(wth_data$DATE))
         
         header <- sprintf(
-          "$WEATHER DATA: GridMET Data (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n GMET  %8.4f %8.4f   -99 %5.1f %5.1f   -99   -99\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
+          "$WEATHER DATA: GridMET Data (Point ID: %s)\n@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n GMET  %8.4f %9.4f   -99 %5.1f %5.1f   -99   -99\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
           point_id, lat, lon, tav, amp
         )
         # Guard against values that would overflow a %6.1f field and shift every

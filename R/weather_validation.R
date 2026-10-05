@@ -76,7 +76,7 @@ is_wth_valid <- function(path, end_year = NULL, required_columns = NULL, start_y
         !within(weather[, "RAIN"], 0, 2000) ||
         !within(weather[, "TDEW"], -100, 70) ||
         !within(weather[, "RH2M"], 0, 100) ||
-        !within(weather[, "WIND"], 0, 100)) return(FALSE)
+        !within(weather[, "WIND"], 0, 8640)) return(FALSE) # WIND: km/day (100 m/s)
     comparable <- observed(weather[, "TMAX"]) & observed(weather[, "TMIN"])
     if (any(weather[comparable, "TMAX"] < weather[comparable, "TMIN"])) return(FALSE)
     required_columns <- intersect(toupper(as.character(required_columns)), colnames(weather))

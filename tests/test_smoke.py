@@ -114,8 +114,10 @@ def test_gridmet_amp_matches_dssat_definition():
     tmax = monthly_mean + 5.0
     tmin = monthly_mean - 5.0
 
-    # Calendar-month means span 1..12 C; DSSAT AMP is half that range.
-    assert _calc_amp(tmax, tmin, dates) == 5.5
+    # Monthly means span 1..12 C; DSSAT divides the full range by two internally.
+    assert _calc_amp(tmax, tmin, dates) == 11.0
+    reversed_year = np.where(dates.year == 2002, 13.0 - monthly_mean, monthly_mean)
+    assert _calc_amp(reversed_year + 5, reversed_year - 5, dates) == 11.0
 
 
 # ---------------------------------------------------------------------------

@@ -297,3 +297,43 @@ to the WTH 2 m reference height. Already-MJ radiation is never rescaled.
 
 SoilGrids online accepts `use_rest_api` explicitly in R and Python; an explicit
 argument takes precedence over the legacy global/configuration default.
+
+## Local and CI validation lanes
+
+`scripts/pre-push.sh` runs the exact offline Python PR gate and records JUnit
+and a test log. Native R tests run in the separate language-parity lane, with
+logs uploaded on success or failure. Platform and live-provider checks remain
+separate. Workflow actions are revision-pinned; Python 3.11 and R 4.3 are explicit.
+
+## Wind units in DSSAT weather files
+
+DSSAT v4.8 `WEATHER.CDE` specifies `WIND` in km/day. NASA POWER, its CHIRPS
+hybrid, and AgERA5 provide wind in m/s; both language writers convert finite
+nonnegative wind by 86.4 at serialization and preserve missing sentinels.
+Weather validation and QA use km/day bounds (100 and 75 m/s equivalents).
+Existing WTH caches from these adapters are not automatically rescaled: their
+units must be verified against their writer provenance before regeneration or
+a backed-up conversion, to avoid converting an already-correct file twice.
+Raw provider caches remain in provider-native units. This fix does not certify
+wind units in other adapters.
+
+Daymet R station metadata now uses the same column alignment as Python. An
+extra leading space previously truncated coordinate precision in DSSAT
+although whitespace-based validation saw the intended coordinate. Both
+entry-point tests check the actual fixed-column coordinate fields. Previously
+generated files require explicit header repair or regeneration.
+
+The five active comparison adapters (Daymet, GridMET, NASA POWER, NASA POWER
++ CHIRPS v2, and AgERA5) reserve nine columns for station longitude in both
+languages. This accommodates longitudes west of 100°W without shifting ELEV,
+TAV or AMP across DSSAT's header boundaries. Regression fixtures include
+three-digit negative longitudes; historical files require an explicit audit.
+AgERA5 also retains two temperature decimals when both values would round to
+zero at one decimal. This prevents rounding alone from creating a zero pair
+that DSSAT rejects; true source zeros are preserved, not artificially perturbed.
+
+GridMET AMP now uses the full mean annual range of monthly temperatures,
+matching Daymet, POWER and AgERA5. DSSAT `SPAM/STEMP.for` divides TAMP by two
+internally; the former `DSSAT::calc_AMP` convention halved it a second time.
+Python and R share the corrected convention and an offline seasonal regression.
+Previously cached headers require explicit regeneration.

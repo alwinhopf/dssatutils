@@ -64,16 +64,14 @@ def _calc_tav(tmax_arr: np.ndarray, tmin_arr: np.ndarray,
 
 def _calc_amp(tmax_arr: np.ndarray, tmin_arr: np.ndarray,
               dates: pd.DatetimeIndex) -> float:
-    """DSSAT AMP: half the range of pooled calendar-month mean temperature.
+    """Mean annual range of monthly temperatures, in degrees C.
 
-    This mirrors ``DSSAT::calc_AMP`` used by the R twin. Pooling by calendar
-    month across the full weather period also makes a repeated climatology
-    invariant to the number of years in the file.
+    DSSAT STEMP divides TAMP by two internally. Match the Daymet, POWER,
+    and AgERA5 writers; do not halve the range again at serialization.
     """
-    df = pd.DataFrame({"tmax": tmax_arr, "tmin": tmin_arr}, index=dates)
-    df["tavg"] = (df["tmax"] + df["tmin"]) / 2.0
-    monthly = df.groupby(df.index.month)["tavg"].mean()
-    return float((monthly.max() - monthly.min()) / 2.0)
+    df = pd.DataFrame({"tavg": (tmax_arr + tmin_arr) / 2.0}, index=dates)
+    monthly = df.groupby([df.index.year, df.index.month])["tavg"].mean()
+    return float(monthly.groupby(level=0).agg(lambda x: x.max() - x.min()).mean())
 
 
 def _validate_gridmet_nc(path: str, abbrev: str) -> bool:
@@ -379,8 +377,8 @@ def process_weather_gridmet(
 
                 header = (
                     f"$WEATHER DATA: GridMET Data (Point ID: {pid})\n"
-                    f"@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n"
-                    f" GMET  {lat:8.4f} {lon:8.4f}   -99 {tav:5.1f} {amp:5.1f}   -99   -99\n"
+                    f"@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n"
+                    f" GMET  {lat:8.4f} {lon:9.4f}   -99 {tav:5.1f} {amp:5.1f}   -99   -99\n"
                     f"@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND"
                 )
 
