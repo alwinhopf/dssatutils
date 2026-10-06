@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 
 from .weather_gridded_common import write_wth
+from .weather_solar import estimate_srad_bristow_campbell
 
 _PRISM_URL = "https://services.nacse.org/prism/data/get/us/4km/{var}/{yyyymmdd}"
 _VARS = {"ppt": "RAIN", "tmax": "TMAX", "tmin": "TMIN", "tdmean": "TDEW"}
@@ -75,13 +76,21 @@ def process_weather_prism(
     shapefile, start_year, end_year, output_dir,
     id_col, lat_col, lon_col, n_cores, log_file,
     prism_cache_dir: str,
+    srad_method: str = "bristow_campbell",
 ) -> None:
     """Download/cache PRISM daily grids and write DSSAT .WTH files.
 
-    PRISM provides precipitation, Tmax, Tmin, and mean dewpoint. Solar radiation,
-    RH, and wind are not daily PRISM variables and are written as DSSAT missing
-    values (-99).
+    PRISM provides precipitation, Tmax, Tmin, and mean dewpoint. Solar radiation
+    is estimated from daily temperature range using Bristow & Campbell (1984)
+    by default (srad_method='bristow_campbell'), or written as DSSAT missing
+    values (-99) when srad_method='none'. RH and wind are written as DSSAT
+    missing values (-99).
     """
+    if srad_method not in ("bristow_campbell", "none"):
+        raise ValueError(
+            f"Unknown srad_method: {srad_method!r}. Expected 'bristow_campbell' or 'none'."
+        )
+
     latest_safe = pd.Timestamp(date.today() - timedelta(days=2))
     dates = pd.date_range(f"{start_year}-01-01", min(pd.Timestamp(f"{end_year}-12-31"), latest_safe), freq="D")
     os.makedirs(output_dir, exist_ok=True)
@@ -98,6 +107,11 @@ def process_weather_prism(
     frames = {pid: [] for pid in ids}
 
     print(f"--- Starting PRISM Processing (Years: {start_year}-{end_year}) ---")
+    if srad_method == "bristow_campbell":
+        print("  PRISM: Estimating solar radiation using Bristow-Campbell (1984)")
+    else:
+        print("  PRISM: Solar radiation estimation disabled (srad_method='none')")
+
     for day in dates:
         day_vals = {}
         for var, dssat_name in _VARS.items():
@@ -117,14 +131,24 @@ def process_weather_prism(
                 "WIND": -99.0,
             })
 
+    source_label = (
+        "PRISM 4km (SRAD estimated: Bristow-Campbell 1984)"
+        if srad_method == "bristow_campbell"
+        else "PRISM 4km"
+    )
     written = 0
     for pid, lat, lon in zip(ids, lats, lons):
         df = pd.DataFrame(frames[pid])
-        df = df[df["TMAX"].notna() & df["TMIN"].notna()].fillna(-99)
+        df = df[df["TMAX"].notna() & df["TMIN"].notna()].copy()
         if df.empty:
             with open(log_file, "a") as lf:
                 lf.write(f"PRISM point {pid}: no valid TMAX/TMIN data extracted\n")
             continue
-        write_wth(df, pid, lat, lon, output_dir, "PRISM 4km", "PRSM", refht=2.0, wndht=-99.0)
+        if srad_method == "bristow_campbell":
+            df["SRAD"] = estimate_srad_bristow_campbell(df["DATE"], df["TMAX"], df["TMIN"], lat)
+        else:
+            df["SRAD"] = -99.0
+        df = df.fillna(-99)
+        write_wth(df, pid, lat, lon, output_dir, source_label, "PRSM", refht=2.0, wndht=-99.0)
         written += 1
     print(f"\nPRISM processing complete: {written}/{len(ids)} point(s) written.\n")

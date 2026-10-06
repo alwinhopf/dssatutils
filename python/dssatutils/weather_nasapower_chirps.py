@@ -23,6 +23,8 @@
 # kwarg (like GridMET's cache dir), so the pipeline wires it the same way.
 # ---------------------------------------------------------------------------
 
+from .weather_format import format_wth_value, wind_run
+
 import os
 import time
 import logging
@@ -224,9 +226,9 @@ def _process_single_point(args: dict) -> None:
         for _, row in df.iterrows():
             line = (
                 f"{row['DATE']:>7s}"
-                f"{row['SRAD']:6.1f}{row['TMAX']:6.1f}{row['TMIN']:6.1f}"
-                f"{row['RAIN']:6.1f}{row['TDEW']:6.1f}{row['RH2M']:6.1f}"
-                f"{(row['WIND'] * 86.4 if row['WIND'] >= 0 else row['WIND']):6.1f}"
+                f"{format_wth_value(row['SRAD'], 1)}{format_wth_value(row['TMAX'], 1)}{format_wth_value(row['TMIN'], 1)}"
+                f"{format_wth_value(row['RAIN'], 1)}{format_wth_value(row['TDEW'], 1)}{format_wth_value(row['RH2M'], 1)}"
+                f"{format_wth_value(wind_run(row['WIND']), 1)}"
             )
             line = line.replace(" -99.0", "   -99")
             lines.append(line)

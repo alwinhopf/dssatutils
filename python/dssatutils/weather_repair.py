@@ -7,6 +7,8 @@ source.
 
 from __future__ import annotations
 
+from .weather_format import format_wth_value, wind_run
+
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -70,6 +72,34 @@ def _code_from_date(value) -> str:
     return f"{value.year}{value.timetuple().tm_yday:03d}"
 
 
+def _parse_daily_rows(data_lines):
+    """Read fixed columns first; retain legacy whitespace rows without dropping days."""
+    rows = []
+    missing = {"NA", "NaN", "Inf", "-Inf"}
+    for line in data_lines:
+        parts = [line[:7].strip()] + [line[i:i + 6].strip() for i in range(7, 49, 6)]
+        def valid(fields):
+            if len(fields) != 8 or not fields[0].isdigit() or len(fields[0]) not in (5, 7):
+                return False
+            try:
+                for value in fields[1:]:
+                    if value not in missing:
+                        float(value)
+                return True
+            except ValueError:
+                return False
+        if len(line.rstrip()) != 49 or not valid(parts):
+            parts = line.split()
+        if not valid(parts):
+            raise ValueError(f"Malformed DSSAT daily weather row: {line!r}")
+        rows.append(parts)
+    dat = pd.DataFrame(rows, columns=("DATE", *DEFAULT_WEATHER_REPAIR_VARS))
+    for col in DEFAULT_WEATHER_REPAIR_VARS:
+        dat[col] = pd.to_numeric(dat[col], errors="coerce")
+        dat.loc[~np.isfinite(dat[col]) | np.isclose(dat[col], -99.0), col] = np.nan
+    return dat
+
+
 def _parse_wth(path: str | Path, log_file: str | Path | None = None, issue: str = "WEATHER_QA"):
     path = Path(path)
     if not path.exists():
@@ -92,15 +122,7 @@ def _parse_wth(path: str | Path, log_file: str | Path | None = None, issue: str 
         ])
         return lines, header_idx, pid, pd.DataFrame(), "skipped_no_rows"
 
-    rows = []
-    for line in data_lines:
-        parts = line.split()
-        if len(parts) >= 8:
-            rows.append(parts[:8])
-    dat = pd.DataFrame(rows, columns=("DATE", *DEFAULT_WEATHER_REPAIR_VARS))
-    for col in DEFAULT_WEATHER_REPAIR_VARS:
-        dat[col] = pd.to_numeric(dat[col], errors="coerce")
-        dat.loc[np.isclose(dat[col], -99.0), col] = np.nan
+    dat = _parse_daily_rows(data_lines)
     dat["_DATE_OBJ"] = dat["DATE"].map(_date_from_code)
     return lines, header_idx, pid, dat, "ok"
 
@@ -112,15 +134,16 @@ def _write_wth(path: str | Path, lines: list[str], header_idx: int, dat: pd.Data
     for col in DEFAULT_WEATHER_REPAIR_VARS:
         values = write_dat[col].to_numpy(dtype=float).copy()
         values[~np.isfinite(values)] = -99.0
-        values[(values >= 9999.95) | (values <= -999.95)] = -99.0
         write_dat[col] = values
     formatted = []
     for _, row in write_dat.iterrows():
+        # Match the provider safeguard for near-freezing temperature pairs.
+        precision = 2 if abs(row["TMAX"]) < 0.05 and abs(row["TMIN"]) < 0.05 else 1
         line = (
             f"{str(row['DATE']):>7s}"
-            f"{row['SRAD']:6.1f}{row['TMAX']:6.1f}{row['TMIN']:6.1f}"
-            f"{row['RAIN']:6.1f}{row['TDEW']:6.1f}{row['RH2M']:6.1f}"
-            f"{row['WIND']:6.1f}"
+            f"{format_wth_value(row['SRAD'], 1)}{format_wth_value(row['TMAX'], precision)}{format_wth_value(row['TMIN'], precision)}"
+            f"{format_wth_value(row['RAIN'], 1)}{format_wth_value(row['TDEW'], 1)}{format_wth_value(row['RH2M'], 1)}"
+            f"{format_wth_value(row['WIND'], 1)}"
         )
         formatted.append(line.replace("-99.0", "  -99"))
     Path(path).write_text("\n".join(lines[:header_idx + 1] + formatted) + "\n", encoding="utf-8")
@@ -194,16 +217,7 @@ def repair_weather_file_missing_values(
             "status": "skipped_no_rows",
         }])
 
-    rows = []
-    for line in data_lines:
-        parts = line.split()
-        if len(parts) < 8:
-            continue
-        rows.append(parts[:8])
-    dat = pd.DataFrame(rows, columns=("DATE", *DEFAULT_WEATHER_REPAIR_VARS))
-    for col in DEFAULT_WEATHER_REPAIR_VARS:
-        dat[col] = pd.to_numeric(dat[col], errors="coerce")
-        dat.loc[np.isclose(dat[col], -99.0), col] = np.nan
+    dat = _parse_daily_rows(data_lines)
 
     wanted = [v.upper() for v in variables]
     wanted = [v for v in wanted if v in DEFAULT_WEATHER_REPAIR_VARS]
@@ -268,22 +282,7 @@ def repair_weather_file_missing_values(
     _append_log(log_file, log_lines)
 
     if not dry_run and any(row["repaired_count"] > 0 for row in summary):
-        write_dat = dat.copy()
-        for col in DEFAULT_WEATHER_REPAIR_VARS:
-            values = write_dat[col].to_numpy(dtype=float).copy()
-            values[~np.isfinite(values)] = -99.0
-            values[(values >= 9999.95) | (values <= -999.95)] = -99.0
-            write_dat[col] = values
-        formatted = []
-        for _, row in write_dat.iterrows():
-            line = (
-                f"{str(row['DATE']):>7s}"
-                f"{row['SRAD']:6.1f}{row['TMAX']:6.1f}{row['TMIN']:6.1f}"
-                f"{row['RAIN']:6.1f}{row['TDEW']:6.1f}{row['RH2M']:6.1f}"
-                f"{row['WIND']:6.1f}"
-            )
-            formatted.append(line.replace("-99.0", "  -99"))
-        path.write_text("\n".join(lines[:header_idx + 1] + formatted) + "\n", encoding="utf-8")
+        _write_wth(path, lines, header_idx, dat)
 
     return pd.DataFrame(summary)
 
@@ -405,16 +404,7 @@ def repair_weather_file_temperature_inversions(
             "status": "skipped_no_rows",
         }])
 
-    rows = []
-    for line in data_lines:
-        parts = line.split()
-        if len(parts) < 8:
-            continue
-        rows.append(parts[:8])
-    dat = pd.DataFrame(rows, columns=("DATE", *DEFAULT_WEATHER_REPAIR_VARS))
-    for col in DEFAULT_WEATHER_REPAIR_VARS:
-        dat[col] = pd.to_numeric(dat[col], errors="coerce")
-        dat.loc[np.isclose(dat[col], -99.0), col] = np.nan
+    dat = _parse_daily_rows(data_lines)
 
     original = dat.copy(deep=True)
     tmax = original["TMAX"].to_numpy(dtype=float)
@@ -503,22 +493,7 @@ def repair_weather_file_temperature_inversions(
     _append_log(log_file, log_lines)
 
     if not dry_run and repaired_count > 0:
-        write_dat = dat.copy()
-        for col in DEFAULT_WEATHER_REPAIR_VARS:
-            values = write_dat[col].to_numpy(dtype=float).copy()
-            values[~np.isfinite(values)] = -99.0
-            values[(values >= 9999.95) | (values <= -999.95)] = -99.0
-            write_dat[col] = values
-        formatted = []
-        for _, row in write_dat.iterrows():
-            line = (
-                f"{str(row['DATE']):>7s}"
-                f"{row['SRAD']:6.1f}{row['TMAX']:6.1f}{row['TMIN']:6.1f}"
-                f"{row['RAIN']:6.1f}{row['TDEW']:6.1f}{row['RH2M']:6.1f}"
-                f"{row['WIND']:6.1f}"
-            )
-            formatted.append(line.replace("-99.0", "  -99"))
-        path.write_text("\n".join(lines[:header_idx + 1] + formatted) + "\n", encoding="utf-8")
+        _write_wth(path, lines, header_idx, dat)
 
     return pd.DataFrame([{
         "file": str(path),

@@ -4,6 +4,8 @@
 # (dominant component, measured tension fallback, Saxton & Rawls PTFs).
 # Mirrors the R soil_ssurgo_alderman.R.
 
+from .weather_format import format_wth_value
+
 import math
 import os
 import time
@@ -856,9 +858,8 @@ def _write_dssat_soil_file(profile, output_dir):
         sdul = format_dssat_decimal(lyr["SDUL"], 3, 5)
         ssat = format_dssat_decimal(lyr["SSAT"], 3, 5)
         srgf = lyr["SRGF"] if not math.isnan(lyr["SRGF"]) else 1.0
-        ssks = lyr["SSKS"] if not math.isnan(lyr["SSKS"]) else -99.0
-        ssks_text = (f"{'-99':>5s}" if ssks == -99 else
-                     f"{ssks:5.1f}" if ssks >= 100 else f"{ssks:5.2f}")
+        ssks = pd.to_numeric(lyr["SSKS"], errors="coerce")
+        ssks_text = format_wth_value(ssks, 2)[1:]
         sbdm = lyr["SBDM"] if not math.isnan(lyr["SBDM"]) else -99.0
         sloc = lyr["SLOC"] if not math.isnan(lyr["SLOC"]) else -99.0
         slcl = lyr["SLCL"] if not math.isnan(lyr["SLCL"]) else -99.0

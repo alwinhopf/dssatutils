@@ -402,6 +402,7 @@ def test_process_weather_prism_entrypoint(tmp_path):
             str(tmp_path / "prism.log"), str(tmp_path / "prism_cache"),
         )
     _assert_wth(out_dir / "SRC1.WTH")
+    assert "SRAD estimated: Bristow-Campbell 1984" in (out_dir / "SRC1.WTH").read_text()
 
 
 HYBRID_RAIN_WEATHER = [

@@ -9,6 +9,8 @@
 # GridMET docs: https://www.climatologylab.org/gridmet.html
 # Data URL base: http://www.northwestknowledge.net/metdata/data/
 
+from .weather_format import format_wth_value, wind_run
+
 import gc
 import math
 import os
@@ -387,13 +389,13 @@ def process_weather_gridmet(
                     date_str = f"{dt.year}{dt.day_of_year:03d}"
                     line = (
                         f"{date_str:>7s}"
-                        f"{srad_arr[di]:6.1f}"
-                        f"{tmax_arr[di]:6.1f}"
-                        f"{tmin_arr[di]:6.1f}"
-                        f"{rain_arr[di]:6.1f}"
-                        f"{tdew_arr[di]:6.1f}"
-                        f"{rh2m_arr[di]:6.1f}"
-                        f"{wind_arr[di]:6.1f}"
+                        f"{format_wth_value(srad_arr[di], 1)}"
+                        f"{format_wth_value(tmax_arr[di], 1)}"
+                        f"{format_wth_value(tmin_arr[di], 1)}"
+                        f"{format_wth_value(rain_arr[di], 1)}"
+                        f"{format_wth_value(tdew_arr[di], 1)}"
+                        f"{format_wth_value(rh2m_arr[di], 1)}"
+                        f"{format_wth_value(wind_arr[di], 1)}"
                     )
                     line = line.replace(" -99.0", "   -99")
                     lines.append(line)

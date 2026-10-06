@@ -34,6 +34,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from .weather_format import format_wth_value
+
 from .soil_ssurgo import _failure, _saxton_rawls, _saxton_rawls_ssks
 
 _ISDA_BASE = "https://isdasoil.s3.amazonaws.com/soil_data"
@@ -114,8 +116,9 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         slll, sdul, ssat = _f3(layer["SLLL"]), _f3(layer["SDUL"]), _f3(layer["SSAT"])
         depth = int(layer["depth_bottom"])
         om_sloc = layer["om_pct"] / 1.724
-        ssks_val = layer["SSKS"] if "SSKS" in layer and pd.notna(layer["SSKS"]) and layer["SSKS"] > 0 else None
-        ssks_str = f"{min(999.0, float(ssks_val)):6.2f}" if ssks_val is not None else "   -99"
+        ssks_val = pd.to_numeric(layer.get("SSKS"), errors="coerce")
+        ssks_val = float(ssks_val) if pd.notna(ssks_val) and np.isfinite(ssks_val) and ssks_val > 0 else None
+        ssks_str = format_wth_value(min(999.0, float(ssks_val)), 2) if ssks_val is not None else "   -99"
         lines.append(
             f"{depth:6d}   -99 {slll} {sdul} {ssat}  1.00{ssks_str}"
             f" {layer['bulk_density']:5.2f} {om_sloc:5.2f}"

@@ -83,6 +83,8 @@ _EXPORTS = {
     "find_rscript": "discovery",
     "find_dssat": "discovery",
     "find_mpi_runner": "discovery",
+    "extraterrestrial_radiation": "weather_solar",
+    "estimate_srad_bristow_campbell": "weather_solar",
 }
 
 __all__ = list(_EXPORTS)

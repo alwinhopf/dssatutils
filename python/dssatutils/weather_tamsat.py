@@ -5,6 +5,8 @@
 # temperature/radiation/humidity/wind come from NASA POWER and rainfall is
 # replaced with TAMSAT where available. Pairs with iSDAsoil for an Africa stack.
 
+from .weather_format import format_wth_value, wind_run
+
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -37,8 +39,8 @@ def _worker(args):
     )
     lines = []
     for _, r in df.iterrows():
-        line = (f"{r['DATE']:>7s}{r['SRAD']:6.1f}{r['TMAX']:6.1f}{r['TMIN']:6.1f}"
-                f"{r['RAIN']:6.1f}{r['TDEW']:6.1f}{r['RH2M']:6.1f}{r['WIND']:6.1f}")
+        line = (f"{r['DATE']:>7s}{format_wth_value(r['SRAD'], 1)}{format_wth_value(r['TMAX'], 1)}{format_wth_value(r['TMIN'], 1)}"
+                f"{format_wth_value(r['RAIN'], 1)}{format_wth_value(r['TDEW'], 1)}{format_wth_value(r['RH2M'], 1)}{format_wth_value(wind_run(r['WIND']), 1)}")
         lines.append(line.replace(" -99.0", "   -99"))
     with open(out, "w") as fh:
         fh.write(header + "\n" + "\n".join(lines) + "\n")

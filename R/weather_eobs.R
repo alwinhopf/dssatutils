@@ -117,11 +117,11 @@ EOBS_VARS <- c(TMAX = "tx", TMIN = "tn", TMEAN = "tg", RAIN = "rr",
   header <- sprintf(
     "$WEATHER DATA: E-OBS (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  EOBS %8.4f %8.4f   -99 %5.1f %5.1f   2.0  10.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
     pid, lat, lon, tav, amp)
-  clamp <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
+
   d <- df; for (c in c("SRAD","TMAX","TMIN","RAIN","TDEW","RH2M","WIND")) d[[c]][is.na(d[[c]])] <- -99
-  lines <- sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                   d$DATE, clamp(d$SRAD), clamp(d$TMAX), clamp(d$TMIN),
-                   clamp(d$RAIN), clamp(d$TDEW), clamp(d$RH2M), clamp(d$WIND))
+  lines <- sprintf("%7s%s%s%s%s%s%s%s",
+                   d$DATE, .format_wth_value(d$SRAD), .format_wth_value(d$TMAX), .format_wth_value(d$TMIN),
+                   .format_wth_value(d$RAIN), .format_wth_value(d$TDEW), .format_wth_value(d$RH2M), .format_wth_value(.weather_wind_run(d$WIND)))
   lines <- gsub("-99.0", "  -99", lines, fixed = TRUE)
   writeLines(c(header, lines), file.path(output_dir, sprintf("%s.WTH", pid)))
 }

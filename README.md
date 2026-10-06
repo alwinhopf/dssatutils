@@ -314,8 +314,8 @@ Weather validation and QA use km/day bounds (100 and 75 m/s equivalents).
 Existing WTH caches from these adapters are not automatically rescaled: their
 units must be verified against their writer provenance before regeneration or
 a backed-up conversion, to avoid converting an already-correct file twice.
-Raw provider caches remain in provider-native units. This fix does not certify
-wind units in other adapters.
+Raw provider caches remain in provider-native units. The October 6 correction
+extends serialization-unit checks to all native weather writers with available wind.
 
 Daymet R station metadata now uses the same column alignment as Python. An
 extra leading space previously truncated coordinate precision in DSSAT
@@ -337,3 +337,69 @@ matching Daymet, POWER and AgERA5. DSSAT `SPAM/STEMP.for` divides TAMP by two
 internally; the former `DSSAT::calc_AMP` convention halved it a second time.
 Python and R share the corrected convention and an offline seasonal regression.
 Previously cached headers require explicit regeneration.
+
+### Fixed-column weather repair and macOS Alderman execution (2026-10-06)
+
+R and Python weather QA, missing-value, date-gap and temperature-inversion
+repairs now read the seven-character date and six-character numeric fields
+before falling back to legacy whitespace rows. Adjacent values such as
+`76.91062.7` represent RH2M 76.9 and WIND 1062.7 km/day when read.
+Malformed rows raise an error instead of silently dropping days. Rewritten
+large values now reserve the DSSAT separator and use integer precision;
+parsing a legacy file alone does not fix the native model input.
+All repair writers share the provider safeguard that retains two-decimal
+near-freezing temperature pairs, so an unrelated repair cannot round them
+back to a DSSAT-rejected pair of zeros. Trailing whitespace remains supported.
+The October 5 wind-unit correction exposed whitespace reader assumptions dating
+to June; the wind conversion is retained.
+
+On macOS, the R SSURGO, gNATSGO and Alderman adapters execute serially even
+when multiple cores are requested, avoiding the fork path after native libraries initialize.
+Windows retains socket workers and Linux retains its existing parallel path.
+Python uses its existing execution path; this is an R-specific platform
+implementation difference, not a soil-output schema change. Refresh the local
+R package and restart R before rerunning failed scenarios; editing source does
+not update an already loaded package.
+
+## DSSAT serialization and platform corrections (6 October 2026)
+
+Daily numeric fields preserve one separator and a five-character token, matching
+DSSAT's header-based column reader. Writers prefer one decimal (two for the
+existing near-freezing safeguard), reducing precision when rounding would consume
+the separator: 999.96 becomes 1000 and 1062.7 becomes 1063. Negative temperatures
+and dewpoints remain valid. Nonfinite values use -99; unrepresentable values raise
+instead of clipping or shifting columns. The neutral writer also retains the
+four-digit-year `$WEATHER` marker and seven-character date header.
+
+Provider data and unit/height conversion helpers retain m/s internally. All
+native DSSAT writers with available wind convert finite nonnegative m/s to
+km/day exactly once (multiply by 86.4); missing wind remains -99. This includes
+Open-Meteo, ERA5-Land, CMFD, DWD, E-OBS, Xavier, the common gridded writer and
+NASA POWER rainfall hybrids. Height adjustments retain matching WNDHT metadata;
+ERA5-Land explicitly declares its 10 m wind measurement height. Existing provider
+caches are not rescaled automatically: verify their writer provenance before
+regenerating outputs, so correctly converted wind is never converted twice.
+
+QA and repairs recover adjacent legacy six-character fields without dropping
+days. Rewritten files reserve the separator expected by the native reader;
+large values consequently have integer precision. Existing adjacent-field WTH
+files require reserialization before native model use; parsing alone does not
+correct the file consumed by DSSAT. iSDAsoil, LUCAS, SSURGO, gNATSGO and Alderman
+conductivity writers also handle the rounding boundary at 100 and character-valued
+numeric responses. Existing provider conductivity caps are unchanged.
+
+The R SSURGO/gNATSGO/Alderman adapters use sequential work on macOS, socket
+workers on Windows and the existing fork path on Linux. This R-specific platform
+policy preserves the R/Python output contract. Offline regressions exercise
+native header columns, legacy row recovery, missing markers, conductivity and
+socket workers with shared fixtures in both languages.
+
+Native R parity tests now run separately on Linux, Windows and macOS, alongside
+the Python platform jobs. CI passes the interpreter's native absolute path from
+Python into R (including Windows) and uploads R JUnit XML and logs on failures.
+Pytest package gates prioritize their own checkout's source to avoid testing a
+different editable installation. Hosted results must be checked after publishing
+changes; local macOS validation does not establish hosted Windows/Linux success.
+
+The combined October 6 results and hosted-CI limits are recorded in
+[the monorepo validation report](../cropmodel/WEATHER_SOIL_PORTABILITY_VALIDATION.md).

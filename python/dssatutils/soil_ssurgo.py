@@ -8,6 +8,8 @@
 # SDA REST endpoint: https://sdmdataaccess.nrcs.usda.gov/Tabular/post.rest
 # Spatial SQL function: SDA_Get_Mukey_from_intersection_with_WktWgs84
 
+from .weather_format import format_wth_value
+
 import math
 import os
 import time
@@ -269,9 +271,9 @@ def _write_sol(profile: pd.DataFrame, output_dir: str) -> None:
         depth = int(layer["depth_bottom"])
         depth_str = f"{depth:6d}" if depth >= 10 else f"{depth:6d}"
         om_sloc = layer["om_pct"] / 1.724  # OM → SOC
-        ssks_val = layer["SSKS"] if "SSKS" in layer and pd.notna(layer["SSKS"]) and layer["SSKS"] > 0 else None
-        ssks_str = (f"{min(999.0, float(ssks_val)):6.1f}" if ssks_val >= 100 else
-                    f"{float(ssks_val):6.2f}") if ssks_val is not None else "   -99"
+        ssks_val = pd.to_numeric(layer.get("SSKS"), errors="coerce")
+        ssks_val = float(ssks_val) if pd.notna(ssks_val) and np.isfinite(ssks_val) and ssks_val > 0 else None
+        ssks_str = format_wth_value(min(999.0, ssks_val), 2) if ssks_val is not None else "   -99"
         lines.append(
             f"{depth_str}   -99 {slll} {sdul} {ssat}  1.00{ssks_str}"
             f" {layer['bulk_density']:5.2f} {om_sloc:5.2f}"

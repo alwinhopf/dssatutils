@@ -36,7 +36,10 @@ PRISM_REQUEST_DELAY <- 1.0
 
 process_weather_prism <- function(shapefile, start_year, end_year, output_dir,
                                   id_col, lat_col, lon_col, n_cores, log_file,
-                                  prism_cache_dir) {
+                                  prism_cache_dir, srad_method = "bristow_campbell") {
+  if (!srad_method %in% c("bristow_campbell", "none")) {
+    stop(sprintf("Unknown srad_method: '%s'. Expected 'bristow_campbell' or 'none'.", srad_method))
+  }
   if (!requireNamespace("terra", quietly = TRUE)) stop("package 'terra' required for PRISM")
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(prism_cache_dir, recursive = TRUE, showWarnings = FALSE)
@@ -50,6 +53,11 @@ process_weather_prism <- function(shapefile, start_year, end_year, output_dir,
   frames <- setNames(vector("list", length(ids)), ids)
   for (i in seq_along(frames)) frames[[i]] <- list()
   message(sprintf("--- Starting PRISM Processing (Years: %d-%d) ---", start_year, end_year))
+  if (srad_method == "bristow_campbell") {
+    message("  PRISM: Estimating solar radiation using Bristow-Campbell (1984)")
+  } else {
+    message("  PRISM: Solar radiation estimation disabled (srad_method='none')")
+  }
   # NB: iterate by index. `for (day in dates)` coerces each Date element to its
   # underlying integer, which breaks format(day, ...); dates[di] preserves class.
   for (di in seq_along(dates)) {
@@ -70,6 +78,11 @@ process_weather_prism <- function(shapefile, start_year, end_year, output_dir,
         RH2M = -99, WIND = -99)
     }
   }
+  source_label <- if (srad_method == "bristow_campbell") {
+    "PRISM 4km (SRAD estimated: Bristow-Campbell 1984)"
+  } else {
+    "PRISM 4km"
+  }
   written <- 0
   for (i in seq_along(ids)) {
     df <- do.call(rbind, frames[[i]])
@@ -78,7 +91,12 @@ process_weather_prism <- function(shapefile, start_year, end_year, output_dir,
       write(sprintf("PRISM point %s: no valid TMAX/TMIN data extracted", ids[i]), file = log_file, append = TRUE)
       next
     }
-    weather_write_wth(df, ids[i], lats[i], lons[i], output_dir, "PRISM 4km", "PRSM", wndht = -99)
+    if (srad_method == "bristow_campbell") {
+      df$SRAD <- estimate_srad_bristow_campbell(df$DATE, df$TMAX, df$TMIN, lats[i])
+    } else {
+      df$SRAD <- -99
+    }
+    weather_write_wth(df, ids[i], lats[i], lons[i], output_dir, source_label, "PRSM", wndht = -99)
     written <- written + 1
   }
   message(sprintf("\nPRISM processing complete: %d/%d point(s) written.\n", written, length(ids)))

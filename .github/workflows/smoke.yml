@@ -37,7 +37,11 @@ jobs:
             fast-tests.log
 
   language-parity:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05
@@ -46,6 +50,7 @@ jobs:
           use-public-rspm: true
 
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgdal-dev libgeos-dev libproj-dev libudunits2-dev libsqlite3-dev
@@ -64,14 +69,17 @@ jobs:
         run: >-
           "$(command -v Rscript)" --vanilla -e
           'pkgload::load_all(".", quiet=TRUE);
-          testthat::test_dir("tests/testthat", reporter="summary", stop_on_failure=TRUE)'
+          reporter <- testthat::MultiReporter$new(list(testthat::SummaryReporter$new(), testthat::JunitReporter$new(file=file.path(getwd(), "r-test-results.xml"))));
+          testthat::test_dir("tests/testthat", reporter=reporter, stop_on_failure=TRUE)'
           2>&1 | tee r-tests.log
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always()
         with:
-          name: r-parity-logs
-          path: '*.log'
+          name: r-parity-${{ runner.os }}-logs
+          path: |
+            *.log
+            r-test-results.xml
           if-no-files-found: ignore
 
   platform-compat:

@@ -740,7 +740,7 @@ write_dssat_soil_file <- function(profile, output_dir) {
       format_dssat_decimal(lyr$SDUL, 3, 5),
       format_dssat_decimal(lyr$SSAT, 3, 5),
       coalesce_num(lyr$SRGF, 1),
-      format_dssat_numeric(lyr$SSKS, 5, ifelse(!is.na(lyr$SSKS) && lyr$SSKS >= 100, 1, 2)),
+      substring(.format_wth_value(lyr$SSKS, 2L), 2L),
       format_dssat_numeric(lyr$SBDM, 5, 2),
       format_dssat_numeric(lyr$SLOC, 5, 2),
       coalesce_num(lyr$SLCL, -99),
@@ -1150,9 +1150,11 @@ process_soils_ssurgo_alderman <- function(grid_points, output_dir_csv, output_di
                     "soil_names", "STATSGO", "standardize_layers"
                   ),
                   envir = environment())
-  } else if (n_cores > 1) {
+  } else if (.soil_use_fork(n_cores)) {
     cl <- max(1, n_cores)
   } else {
+    # macOS must avoid fork after native GIS/network libraries initialize.
+    # Use in-process execution there rather than disabling Apple fork safety.
     # Keep single-core runs in-process so local mocks and lightweight tests do
     # not fall through to live SDA requests in a worker process.
     cl <- NULL

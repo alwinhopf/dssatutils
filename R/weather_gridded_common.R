@@ -70,8 +70,8 @@ weather_write_wth <- function(df, pid, lat, lon, output_dir, source_label,
     source_label, pid, insi, lat, lon, tav, amp, refht, wndht)
   d <- df
   for (nm in c("SRAD", "TMAX", "TMIN", "RAIN", "TDEW", "RH2M", "WIND")) d[[nm]][is.na(d[[nm]])] <- -99
-  lines <- sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                   d$DATE, d$SRAD, d$TMAX, d$TMIN, d$RAIN, d$TDEW, d$RH2M, d$WIND)
+  lines <- sprintf("%7s%s%s%s%s%s%s%s",
+                   d$DATE, .format_wth_value(d$SRAD), .format_wth_value(d$TMAX), .format_wth_value(d$TMIN), .format_wth_value(d$RAIN), .format_wth_value(d$TDEW), .format_wth_value(d$RH2M), .format_wth_value(.weather_wind_run(d$WIND)))
   lines <- gsub("-99.0", "  -99", lines, fixed = TRUE)
   writeLines(c(header, lines), file.path(output_dir, sprintf("%s.WTH", pid)))
 }

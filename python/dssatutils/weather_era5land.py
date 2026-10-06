@@ -6,6 +6,8 @@
 #
 # CDS dataset: "reanalysis-era5-land-timeseries"
 
+from .weather_format import format_wth_value, wind_run
+
 import os
 import re
 import gc
@@ -230,7 +232,7 @@ def _write_dssat_weather_file(weather_data, latitude, longitude, output_file, po
     lines = [
         f"$WEATHER DATA: ERA5-LAND  (Point ID: {point_id})",
         "@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT",
-        f"E5LD    {latitude:8.4f} {longitude:8.4f}   -99 {tav:5.1f} {amp:5.1f}   -99   -99",
+        f"E5LD    {latitude:8.4f} {longitude:8.4f}   -99 {tav:5.1f} {amp:5.1f}   2.0  10.0",
         "@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND"
     ]
 
@@ -246,13 +248,13 @@ def _write_dssat_weather_file(weather_data, latitude, longitude, output_file, po
 
         line = (
             f"{date_str:>7s}"
-            f"{srad:6.1f}"
-            f"{tmax:6.1f}"
-            f"{tmin:6.1f}"
-            f"{rain:6.1f}"
-            f"{tdew:6.1f}"
-            f"{rh2m:6.1f}"
-            f"{wind:6.1f}"
+            f"{format_wth_value(srad, 1)}"
+            f"{format_wth_value(tmax, 1)}"
+            f"{format_wth_value(tmin, 1)}"
+            f"{format_wth_value(rain, 1)}"
+            f"{format_wth_value(tdew, 1)}"
+            f"{format_wth_value(rh2m, 1)}"
+            f"{format_wth_value(wind_run(wind), 1)}"
         )
         lines.append(line)
 

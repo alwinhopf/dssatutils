@@ -1,4 +1,4 @@
-# File: weather_dwd.R   (R twin of python/dssatutils/weather_dwd.py)
+# File: weather_dwd.R   (R twin of python/cropmodeldata/weather_dwd.py)
 #
 # Weather source: DWD (Deutscher Wetterdienst) Open Data — daily climate station
 # observations for Germany -> DSSAT .WTH.
@@ -20,14 +20,7 @@ DWD_STATION_DESC <- "KL_Tageswerte_Beschreibung_Stationen.txt"
 
 # --- Solar radiation from sunshine duration (Angstrom-Prescott / FAO-56) ------
 .dwd_extraterrestrial <- function(lat_deg, doy) {
-  phi <- lat_deg * pi / 180
-  dr <- 1 + 0.033 * cos(2 * pi / 365 * doy)
-  decl <- 0.409 * sin(2 * pi / 365 * doy - 1.39)
-  ws <- acos(pmin(pmax(-tan(phi) * tan(decl), -1), 1))
-  Gsc <- 0.0820
-  Ra <- (24 * 60 / pi) * Gsc * dr * (ws * sin(phi) * sin(decl) +
-                                     cos(phi) * cos(decl) * sin(ws))
-  list(Ra = pmax(Ra, 0), ws = ws)
+  extraterrestrial_radiation(lat_deg, doy)
 }
 
 .dwd_srad_from_sunshine <- function(lat_deg, doy, sunshine_h, a_s = 0.25, b_s = 0.50) {
@@ -167,11 +160,11 @@ DWD_STATION_DESC <- "KL_Tageswerte_Beschreibung_Stationen.txt"
   header <- sprintf(
     "$WEATHER DATA: DWD (Point ID: %s)\n@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT\n  DWD  %8.4f %8.4f %s %5.1f %5.1f   2.0  10.0\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
     pid, lat, lon, elev_str, tav, amp)
-  clamp <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
+
   d <- df; for (c in c("SRAD","TMAX","TMIN","RAIN","TDEW","RH2M","WIND")) d[[c]][is.na(d[[c]])] <- -99
-  lines <- sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                   d$DATE, clamp(d$SRAD), clamp(d$TMAX), clamp(d$TMIN),
-                   clamp(d$RAIN), clamp(d$TDEW), clamp(d$RH2M), clamp(d$WIND))
+  lines <- sprintf("%7s%s%s%s%s%s%s%s",
+                   d$DATE, .format_wth_value(d$SRAD), .format_wth_value(d$TMAX), .format_wth_value(d$TMIN),
+                   .format_wth_value(d$RAIN), .format_wth_value(d$TDEW), .format_wth_value(d$RH2M), .format_wth_value(.weather_wind_run(d$WIND)))
   lines <- gsub("-99.0", "  -99", lines, fixed = TRUE)
   writeLines(c(header, lines), file.path(output_dir, sprintf("%s.WTH", pid)))
 }

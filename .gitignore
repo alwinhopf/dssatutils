@@ -39,3 +39,5 @@ weather_cache/
 fast-tests.log
 r-tests.log
 test-results.xml
+
+r-test-results.xml

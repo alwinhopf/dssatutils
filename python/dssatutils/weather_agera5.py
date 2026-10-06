@@ -28,6 +28,8 @@
 
 from __future__ import annotations
 
+from .weather_format import format_wth_value, wind_run
+
 import os
 from .provider_retry import provider_retry, ProviderConnectivityError, bounded_map
 import glob
@@ -699,9 +701,9 @@ def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
         decimals = 2 if near_zero else 1
         line = (
             f"{row['DATE']:>7s}"
-            f"{row['SRAD']:6.1f}{row['TMAX']:6.{decimals}f}{row['TMIN']:6.{decimals}f}"
-            f"{row['RAIN']:6.1f}{row['TDEW']:6.1f}{row['RH2M']:6.1f}"
-            f"{(row['WIND'] * 86.4 if row['WIND'] >= 0 else row['WIND']):6.1f}"
+            f"{format_wth_value(row['SRAD'], 1)}{format_wth_value(row['TMAX'], decimals)}{format_wth_value(row['TMIN'], decimals)}"
+            f"{format_wth_value(row['RAIN'], 1)}{format_wth_value(row['TDEW'], 1)}{format_wth_value(row['RH2M'], 1)}"
+            f"{format_wth_value(wind_run(row['WIND']), 1)}"
         )
         line = line.replace(" -99.0", "   -99")
         lines.append(line)

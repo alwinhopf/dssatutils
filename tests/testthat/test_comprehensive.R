@@ -570,6 +570,14 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
     .package = "sf"
   )
   
+  local_mocked_bindings(
+    pblapply = function(X, FUN, ..., cl = NULL) {
+      expect_null(cl) # A four-core macOS request must never select fork workers.
+      lapply(X, FUN, ...)
+    },
+    .package = "pbapply"
+  )
+
   output_csv <- file.path(work_dir, "soil_map.csv")
   output_sol_dir <- file.path(work_dir, "individual_sol")
   dir.create(output_sol_dir, recursive = TRUE, showWarnings = FALSE)
@@ -578,7 +586,7 @@ test_that("process_soils_ssurgo runs successfully with mocks", {
     grid_points = shapefile,
     output_dir_csv = output_csv,
     output_dir_individual = output_sol_dir,
-    n_cores = 1,
+    n_cores = if (Sys.info()[["sysname"]] == "Darwin") 4L else 1L,
     id_col = "ID",
     lat_col = "LAT",
     long_col = "LONG",
@@ -662,6 +670,14 @@ test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
     .package = "sf"
   )
   
+  local_mocked_bindings(
+    pblapply = function(X, FUN, ..., cl = NULL) {
+      expect_null(cl) # A four-core macOS request must never select fork workers.
+      lapply(X, FUN, ...)
+    },
+    .package = "pbapply"
+  )
+
   output_csv <- file.path(work_dir, "soil_map.csv")
   output_sol_dir <- file.path(work_dir, "individual_sol")
   dir.create(output_sol_dir, recursive = TRUE, showWarnings = FALSE)
@@ -670,7 +686,7 @@ test_that("process_soils_ssurgo_alderman runs successfully with mocks", {
     grid_points = shapefile,
     output_dir_csv = output_csv,
     output_dir_individual = output_sol_dir,
-    n_cores = 1,
+    n_cores = if (Sys.info()[["sysname"]] == "Darwin") 4L else 1L,
     id_col = "ID",
     lat_col = "LAT",
     long_col = "LONG",

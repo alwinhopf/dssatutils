@@ -163,3 +163,29 @@ test_that("weather quality audit flags suspicious rows without modifying file", 
   expect_true("tmin_gt_tmax" %in% audit$issue)
   expect_true("RAIN_flatline" %in% audit$issue)
 })
+
+
+test_that("all repairs retain adjacent full-width wind and every day", {
+  wth <- tempfile(fileext = ".WTH")
+  file.copy(testthat::test_path("..", "fixtures", "weather_adjacent_wind.txt"), wth)
+  writeLines(paste0(readLines(wth), "  "), wth)
+  dat <- .weather_repair_parse_wth(wth)$dat
+  expect_equal(nrow(dat), 7L)
+  expect_equal(dat$WIND, rep(1062.7, 7))
+  repair_weather_file_missing_values(wth)
+  repair_weather_file_temperature_inversions(wth, method = "swap")
+  rows <- readLines(wth)
+  writeLines(rows[!grepl("^1984004", rows)], wth)
+  gap <- repair_weather_file_date_gaps(wth)
+  expect_equal(gap$repaired_count, 1L)
+  audit_weather_file_quality(wth)
+  dat <- .weather_repair_parse_wth(wth)$dat
+  expect_equal(nrow(dat), 7L)
+  expect_equal(dat$WIND, rep(1063, 7))
+  expect_equal(dat$RH2M, rep(76.9, 7))
+  expect_equal(dat$RAIN[4], 1.7)
+  expect_equal(dat$TMAX[3], 19)
+  expect_equal(dat$TMAX[1], 0.04)
+  expect_equal(dat$TMIN[1], 0.01)
+  expect_error(.weather_repair_parse_daily_rows("1984001 broken"), "Malformed")
+})

@@ -56,6 +56,29 @@
   writeLines(lines, con = con, sep = "\n", useBytes = TRUE)
 }
 
+.weather_repair_parse_daily_rows <- function(data_lines) {
+  missing <- c("NA", "NaN", "Inf", "-Inf")
+  valid <- function(fields) {
+    length(fields) == 8L && grepl("^[0-9]{5}([0-9]{2})?$", fields[1]) &&
+      all(fields[-1] %in% missing | !is.na(suppressWarnings(as.numeric(fields[-1]))))
+  }
+  rows <- lapply(data_lines, function(line) {
+    fields <- trimws(c(substr(line, 1L, 7L),
+                      substring(line, seq.int(8L, 44L, 6L), seq.int(13L, 49L, 6L))))
+    if (nchar(sub("[[:space:]]+$", "", line)) != 49L || !valid(fields)) fields <- strsplit(trimws(line), "\\s+")[[1]]
+    if (!valid(fields)) stop(sprintf("Malformed DSSAT daily weather row: %s", line), call. = FALSE)
+    fields
+  })
+  dat <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE)
+  names(dat) <- c("DATE", .weather_repair_default_vars)
+  dat[.weather_repair_default_vars] <- lapply(dat[.weather_repair_default_vars], function(x) {
+    x <- suppressWarnings(as.numeric(x))
+    x[!is.finite(x) | abs(x + 99) < 1e-6] <- NA_real_
+    x
+  })
+  dat
+}
+
 .weather_repair_parse_wth <- function(wth_file, log_file = NULL, issue = "WEATHER_QA") {
   lines <- readLines(wth_file, warn = FALSE)
   header_idx <- .weather_repair_find_header(lines)
@@ -78,13 +101,7 @@
     return(list(lines = lines, header_idx = header_idx, id = id,
                 dat = data.frame(), status = "skipped_no_rows"))
   }
-  dat <- utils::read.table(
-    text = paste(data_lines, collapse = "\n"),
-    col.names = c("DATE", .weather_repair_default_vars),
-    colClasses = c("character", rep("numeric", length(.weather_repair_default_vars))),
-    na.strings = c("-99", "-99.0", "-99.00", "-99.000", "NA", "NaN", "Inf", "-Inf"),
-    stringsAsFactors = FALSE
-  )
+  dat <- .weather_repair_parse_daily_rows(data_lines)
   dat$..DATE_OBJ <- as.Date(vapply(dat$DATE, function(x) {
     as.character(.weather_repair_date_from_code(x))
   }, character(1)))
@@ -96,12 +113,15 @@
   write_dat$..DATE_OBJ <- NULL
   write_dat[.weather_repair_default_vars] <- lapply(write_dat[.weather_repair_default_vars], function(x) {
     x[is.na(x) | !is.finite(x)] <- -99
-    x[x >= 9999.95 | x <= -999.95] <- -99
     x
   })
-  formatted <- sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                       write_dat$DATE, write_dat$SRAD, write_dat$TMAX, write_dat$TMIN,
-                       write_dat$RAIN, write_dat$TDEW, write_dat$RH2M, write_dat$WIND)
+  # Retain the provider safeguard against rounding near-freezing pairs to zero.
+  near_zero <- abs(write_dat$TMAX) < 0.05 & abs(write_dat$TMIN) < 0.05
+  formatted <- sprintf("%7s%s%s%s%s%s%s%s",
+                       write_dat$DATE, .format_wth_value(write_dat$SRAD),
+                       .format_wth_value(write_dat$TMAX, ifelse(near_zero, 2L, 1L)),
+                       .format_wth_value(write_dat$TMIN, ifelse(near_zero, 2L, 1L)),
+                       .format_wth_value(write_dat$RAIN), .format_wth_value(write_dat$TDEW), .format_wth_value(write_dat$RH2M), .format_wth_value(write_dat$WIND))
   formatted <- gsub("-99.0", "  -99", formatted, fixed = TRUE)
   writeLines(c(lines[seq_len(header_idx)], formatted), wth_file, useBytes = TRUE)
 }
@@ -156,13 +176,7 @@ repair_weather_file_missing_values <- function(wth_file,
                       status = "skipped_no_rows", stringsAsFactors = FALSE))
   }
 
-  dat <- utils::read.table(
-    text = paste(data_lines, collapse = "\n"),
-    col.names = c("DATE", .weather_repair_default_vars),
-    colClasses = c("character", rep("numeric", length(.weather_repair_default_vars))),
-    na.strings = c("-99", "-99.0", "-99.00", "-99.000", "NA", "NaN", "Inf", "-Inf"),
-    stringsAsFactors = FALSE
-  )
+  dat <- .weather_repair_parse_daily_rows(data_lines)
   variables <- intersect(toupper(as.character(variables)), .weather_repair_default_vars)
   if (!length(variables)) variables <- .weather_repair_default_vars
 
@@ -234,17 +248,7 @@ repair_weather_file_missing_values <- function(wth_file,
   .weather_repair_log_lines(log_file, log_lines)
 
   if (!dry_run && any(vapply(summary_rows, function(x) x$repaired_count > 0L, logical(1)))) {
-    write_dat <- dat
-    write_dat[.weather_repair_default_vars] <- lapply(write_dat[.weather_repair_default_vars], function(x) {
-      x[is.na(x) | !is.finite(x)] <- -99
-      x[x >= 9999.95 | x <= -999.95] <- -99
-      x
-    })
-    formatted <- sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                         write_dat$DATE, write_dat$SRAD, write_dat$TMAX, write_dat$TMIN,
-                         write_dat$RAIN, write_dat$TDEW, write_dat$RH2M, write_dat$WIND)
-    formatted <- gsub("-99.0", "  -99", formatted, fixed = TRUE)
-    writeLines(c(lines[seq_len(header_idx)], formatted), wth_file, useBytes = TRUE)
+    .weather_repair_write_wth(wth_file, lines, header_idx, dat)
   }
 
   do.call(rbind, summary_rows)
@@ -357,13 +361,7 @@ repair_weather_file_temperature_inversions <- function(wth_file,
                       stringsAsFactors = FALSE))
   }
 
-  dat <- utils::read.table(
-    text = paste(data_lines, collapse = "\n"),
-    col.names = c("DATE", .weather_repair_default_vars),
-    colClasses = c("character", rep("numeric", length(.weather_repair_default_vars))),
-    na.strings = c("-99", "-99.0", "-99.00", "-99.000"),
-    stringsAsFactors = FALSE
-  )
+  dat <- .weather_repair_parse_daily_rows(data_lines)
   original <- dat
   inversion <- is.finite(original$TMAX) & is.finite(original$TMIN) &
     !is.na(original$TMAX) & !is.na(original$TMIN) &
@@ -461,17 +459,7 @@ repair_weather_file_temperature_inversions <- function(wth_file,
   .weather_repair_log_lines(log_file, log_lines)
 
   if (!dry_run && repaired_count > 0L) {
-    write_dat <- dat
-    write_dat[.weather_repair_default_vars] <- lapply(write_dat[.weather_repair_default_vars], function(x) {
-      x[is.na(x) | !is.finite(x)] <- -99
-      x[x >= 9999.95 | x <= -999.95] <- -99
-      x
-    })
-    formatted <- sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                         write_dat$DATE, write_dat$SRAD, write_dat$TMAX, write_dat$TMIN,
-                         write_dat$RAIN, write_dat$TDEW, write_dat$RH2M, write_dat$WIND)
-    formatted <- gsub("-99.0", "  -99", formatted, fixed = TRUE)
-    writeLines(c(lines[seq_len(header_idx)], formatted), wth_file, useBytes = TRUE)
+    .weather_repair_write_wth(wth_file, lines, header_idx, dat)
   }
 
   data.frame(

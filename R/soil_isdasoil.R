@@ -81,8 +81,9 @@ format_dssat_soil_isdasoil <- function(profile_data, output_dir) {
     slll <- sub("^0", " ", sprintf("%5.3f", layer$SLLL))
     sdul <- sub("^0", " ", sprintf("%5.3f", layer$SDUL))
     ssat <- sub("^0", " ", sprintf("%5.3f", layer$SSAT))
-    ssks_str <- if ("SSKS" %in% names(layer) && !is.na(layer$SSKS) && layer$SSKS > 0) {
-      sprintf("%6.2f", min(999.0, layer$SSKS))
+    ssks_val <- suppressWarnings(as.numeric(layer$SSKS))
+    ssks_str <- if (length(ssks_val) && is.finite(ssks_val) && ssks_val > 0) {
+      .format_wth_value(min(999.0, ssks_val), 2L)
     } else {
       "   -99"
     }

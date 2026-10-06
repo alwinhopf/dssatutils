@@ -289,13 +289,13 @@
   lines <- c(
     sprintf("$WEATHER DATA: ERA5-LAND  (Point ID: %s)", point_id),
     "@ INSI      LAT     LONG  ELEV   TAV   AMP REFHT WNDHT",
-    sprintf("E5LD    %8.4f %8.4f   -99 %5.1f %5.1f   -99   -99", latitude, longitude, tav, amp),
+    sprintf("E5LD    %8.4f %8.4f   -99 %5.1f %5.1f   2.0  10.0", latitude, longitude, tav, amp),
     "@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND"
   )
 
   body <- with(
     weather_data_out,
-    sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f", DATE, SRAD, TMAX, TMIN, RAIN, TDEW, RH2M, WIND)
+    sprintf("%7s%s%s%s%s%s%s%s", DATE, .format_wth_value(SRAD), .format_wth_value(TMAX), .format_wth_value(TMIN), .format_wth_value(RAIN), .format_wth_value(TDEW), .format_wth_value(RH2M), .format_wth_value(.weather_wind_run(WIND)))
   )
 
   writeLines(c(lines, body), con = output_file)
@@ -423,6 +423,7 @@ process_weather_era5_land <- function(shapefile,
         ".find_first_matching_column", ".ensure_numeric",
         ".aggregate_era5_land_to_daily", ".fill_na_with_neighbor_mean",
         ".calc_rh_from_temp_dew", ".write_dssat_weather_file",
+        ".format_wth_value", ".weather_wind_run",
         ".log_worker_message", ".dssatutils_cds_default_url",
         ".dssatutils_cds_rc_candidates", ".dssatutils_read_cdsapirc",
         ".dssatutils_prompt_secret", "setup_cds_credentials",

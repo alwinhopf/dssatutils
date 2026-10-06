@@ -24,6 +24,9 @@
 # isolated from the .WTH formatting (_write_wth) so the latter is unit-testable
 # with synthetic data, exactly like the AgERA5 module.
 
+from .weather_format import format_wth_value, wind_run
+from .weather_solar import extraterrestrial_radiation
+
 import io
 import math
 import os
@@ -63,22 +66,7 @@ def _calc_amp(df: pd.DataFrame) -> float:
 # Solar radiation from sunshine duration (Angstrom-Prescott / FAO-56)
 # ---------------------------------------------------------------------------
 
-def _extraterrestrial_radiation(lat_deg, doy):
-    """Daily extraterrestrial radiation Ra (MJ/m²/day). FAO-56 eq. 21.
-
-    Vectorised over arrays of day-of-year for a fixed latitude.
-    """
-    phi = math.radians(lat_deg)
-    doy = np.asarray(doy, dtype=float)
-    dr = 1.0 + 0.033 * np.cos(2.0 * math.pi / 365.0 * doy)            # inverse rel. distance
-    decl = 0.409 * np.sin(2.0 * math.pi / 365.0 * doy - 1.39)         # solar declination
-    arg = np.clip(-np.tan(phi) * np.tan(decl), -1.0, 1.0)
-    ws = np.arccos(arg)                                               # sunset hour angle
-    Gsc = 0.0820                                                      # MJ/m²/min
-    Ra = (24.0 * 60.0 / math.pi) * Gsc * dr * (
-        ws * math.sin(phi) * np.sin(decl)
-        + math.cos(phi) * np.cos(decl) * np.sin(ws))
-    return np.maximum(Ra, 0.0), ws
+_extraterrestrial_radiation = extraterrestrial_radiation
 
 
 def _srad_from_sunshine(lat_deg, doy, sunshine_h, a_s=0.25, b_s=0.50):
@@ -239,9 +227,9 @@ def _write_wth(df: pd.DataFrame, pid: str, lat: float, lon: float,
     for _, row in df.iterrows():
         line = (
             f"{row['DATE']:>7s}"
-            f"{row['SRAD']:6.1f}{row['TMAX']:6.1f}{row['TMIN']:6.1f}"
-            f"{row['RAIN']:6.1f}{row['TDEW']:6.1f}{row['RH2M']:6.1f}"
-            f"{row['WIND']:6.1f}"
+            f"{format_wth_value(row['SRAD'], 1)}{format_wth_value(row['TMAX'], 1)}{format_wth_value(row['TMIN'], 1)}"
+            f"{format_wth_value(row['RAIN'], 1)}{format_wth_value(row['TDEW'], 1)}{format_wth_value(row['RH2M'], 1)}"
+            f"{format_wth_value(wind_run(row['WIND']), 1)}"
         )
         line = line.replace(" -99.0", "   -99")
         lines.append(line)

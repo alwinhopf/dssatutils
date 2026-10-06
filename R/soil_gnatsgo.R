@@ -105,10 +105,9 @@ format_dssat_soil_gnatsgo <- function(profile_data, output_dir) {
       sdul <- sub("^0", " ", sprintf("%5.3f", layer$SDUL))
       ssat <- sub("^0", " ", sprintf("%5.3f", layer$SSAT))
       depth_format <- sprintf("%6d", depth_val)
-      ssks_val <- if ("SSKS" %in% names(layer)) layer$SSKS else rep(NA_real_, nrow(layer))
-      ssks_str <- ifelse(!is.na(ssks_val) & ssks_val > 0,
-                         ifelse(ssks_val >= 100, sprintf("%6.1f", pmin(999.0, ssks_val)),
-                                sprintf("%6.2f", ssks_val)),
+      ssks_val <- if ("SSKS" %in% names(layer)) suppressWarnings(as.numeric(layer$SSKS)) else rep(NA_real_, nrow(layer))
+      ssks_str <- ifelse(is.finite(ssks_val) & ssks_val > 0,
+                         .format_wth_value(pmin(999.0, ssks_val), 2L),
                          "   -99")
       cat(paste0(sprintf("%s   -99 %s %s %s  1.00%s %5.2f %5.2f %5.1f %5.1f   -99   -99   -99   -99   -99   -99\n",
                          depth_format, slll, sdul, ssat, ssks_str,
@@ -277,7 +276,8 @@ process_soils_gnatsgo <- function(grid_points, output_dir_csv, output_dir_indivi
                                             "id_col", "lat_col", "long_col", "format_sql_func"),
                             envir = environment())
   } else {
-    cl <- if (n_cores > 1L) n_cores else NULL
+    # Avoid fork after native GIS/network libraries initialize on macOS.
+    cl <- if (.soil_use_fork(n_cores)) n_cores else NULL
   }
 
   all_fails <- list()

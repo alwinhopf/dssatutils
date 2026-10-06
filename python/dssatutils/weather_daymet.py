@@ -1,3 +1,5 @@
+from .weather_format import format_wth_value, wind_run
+
 from .provider_retry import ProviderConnectivityError, provider_transient, bounded_map
 # File: weather_daymet.py
 # Python port of weather_daymet.R
@@ -169,13 +171,13 @@ def _process_single_point(args: dict) -> None:
         for _, row in raw.iterrows():
             line = (
                 f"{row['DATE']:>7s}"
-                f"{row['srad_mj']:6.1f}"
-                f"{row['tmax']:6.1f}"
-                f"{row['tmin']:6.1f}"
-                f"{row['prcp']:6.1f}"
-                f"{row['tdew']:6.1f}"
-                f"{row['rh2m']:6.1f}"
-                f"{row['wind']:6.1f}"
+                f"{format_wth_value(row['srad_mj'], 1)}"
+                f"{format_wth_value(row['tmax'], 1)}"
+                f"{format_wth_value(row['tmin'], 1)}"
+                f"{format_wth_value(row['prcp'], 1)}"
+                f"{format_wth_value(row['tdew'], 1)}"
+                f"{format_wth_value(row['rh2m'], 1)}"
+                f"{format_wth_value(row['wind'], 1)}"
             )
             line = line.replace(" -99.0", "   -99")
             lines.append(line)

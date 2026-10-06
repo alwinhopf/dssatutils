@@ -43,7 +43,7 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
   leap_years <- seq(start_year, end_year)[lubridate::leap_year(seq(start_year, end_year))]
   
   # This is your exact code from STEP 2, just inside a function
-  foreach(i = 1:nrow(shapefile), .packages = c("daymetr", "lubridate")) %dopar% {
+  foreach(i = 1:nrow(shapefile), .export = c(".format_wth_value", ".weather_wind_run"), .packages = c("daymetr", "lubridate")) %dopar% {
     
     latitude <- lats[i]
     longitude <- lons[i]
@@ -104,17 +104,14 @@ process_weather_daymet <- function(shapefile, start_year, end_year, output_dir,
         "$WEATHER DATA: DayMet Data (Point ID: %s)\n@ INSI      LAT      LONG  ELEV   TAV   AMP REFHT WNDHT\n DMET  %8.4f %9.4f   -99 %5.1f %5.1f   -99   -99\n@  DATE  SRAD  TMAX  TMIN  RAIN  TDEW  RH2M  WIND",
         point_id, latitude, longitude, tav, amp
       )
-      
-      # Guard against values that would overflow a %6.1f field and shift every
-      # downstream column (see weather_nasapower.R). Local so it is visible in
-      # the parallel worker; corrupt readings become the DSSAT missing value.
-      clamp_wth <- function(x) ifelse(!is.na(x) & (x >= 9999.95 | x <= -999.95), -99, x)
+
+      # Shared formatting preserves the DSSAT separator and checks width.
+
       weather_lines <- with(weather_data, {
         sprintf(
-          "%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-          DATE, clamp_wth(srad_mj), clamp_wth(`tmax..deg.c.`), clamp_wth(`tmin..deg.c.`),
-          clamp_wth(`prcp..mm.day.`), clamp_wth(t_dew), clamp_wth(rh_2m), clamp_wth(wind)
-        )
+          "%7s%s%s%s%s%s%s%s",
+          DATE, .format_wth_value(srad_mj), .format_wth_value(`tmax..deg.c.`), .format_wth_value(`tmin..deg.c.`),
+          .format_wth_value(`prcp..mm.day.`), .format_wth_value(t_dew), .format_wth_value(rh_2m), .format_wth_value(wind))
       })
       
       weather_lines <- gsub("-99.0", "  -99", weather_lines, fixed = TRUE)

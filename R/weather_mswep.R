@@ -17,14 +17,14 @@ process_weather_mswep <- function(shapefile, start_year, end_year, output_dir,
     ln <- readLines(f, warn = FALSE)
     data_idx <- grep("^\\s*[0-9]{7}\\s+", ln)
     for (ii in data_idx) {
-      parts <- strsplit(trimws(ln[ii]), "\\s+")[[1]]
+      parts <- as.character(.weather_repair_parse_daily_rows(ln[ii])[1, ])
       if (length(parts) >= 5 && parts[1] %in% names(rf)) {
         parts[5] <- sprintf("%.1f", as.numeric(rf[[parts[1]]]))
-        ln[ii] <- sprintf("%7s%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f%6.1f",
-                          parts[1], as.numeric(parts[2]), as.numeric(parts[3]),
-                          as.numeric(parts[4]), as.numeric(parts[5]),
-                          as.numeric(parts[6]), as.numeric(parts[7]),
-                          as.numeric(parts[8]))
+        ln[ii] <- sprintf("%7s%s%s%s%s%s%s%s",
+                          parts[1], .format_wth_value(as.numeric(parts[2])), .format_wth_value(as.numeric(parts[3])),
+                          .format_wth_value(as.numeric(parts[4])), .format_wth_value(as.numeric(parts[5])),
+                          .format_wth_value(as.numeric(parts[6])), .format_wth_value(as.numeric(parts[7])),
+                          .format_wth_value(as.numeric(parts[8])))
       }
     }
     writeLines(ln, f)

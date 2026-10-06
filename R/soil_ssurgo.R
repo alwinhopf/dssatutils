@@ -118,10 +118,9 @@ format_dssat_soil_single <- function(profile_data, output_dir) {
       ssat <- sub("^0", " ", sprintf("%5.3f", layer$SSAT))
       
       depth_format <- sprintf("%6d", depth_val)
-      ssks_val <- if ("SSKS" %in% names(layer)) layer$SSKS else rep(NA_real_, nrow(layer))
-      ssks_str <- ifelse(!is.na(ssks_val) & ssks_val > 0,
-                         ifelse(ssks_val >= 100, sprintf("%6.1f", pmin(999.0, ssks_val)),
-                                sprintf("%6.2f", ssks_val)),
+      ssks_val <- if ("SSKS" %in% names(layer)) suppressWarnings(as.numeric(layer$SSKS)) else rep(NA_real_, nrow(layer))
+      ssks_str <- ifelse(is.finite(ssks_val) & ssks_val > 0,
+                         .format_wth_value(pmin(999.0, ssks_val), 2L),
                          "   -99")
       
       coalesce_bd <- ifelse(is.na(layer$bulk_density) | layer$bulk_density <= 0, 1.4, layer$bulk_density)
@@ -333,9 +332,10 @@ process_soils_ssurgo <- function(grid_points, output_dir_csv, output_dir_individ
                                 "format_dssat_soil_single", "output_dir_individual", 
                                 "id_col", "lat_col", "long_col", "format_sql_func"), 
                   envir = environment())
-  } else if (n_cores > 1) {
+  } else if (.soil_use_fork(n_cores)) {
     cl <- n_cores 
   } else {
+    # Avoid fork after native GIS/network libraries initialize on macOS.
     # Keep single-core runs in-process so local mocks and lightweight tests do
     # not fall through to live SDA requests in a worker process.
     cl <- NULL

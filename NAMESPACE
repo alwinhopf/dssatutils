@@ -70,6 +70,8 @@ export(find_rscript)
 export(find_dssat)
 export(find_mpi_runner)
 export(find_python)
+export(extraterrestrial_radiation)
+export(estimate_srad_bristow_campbell)
 
 importFrom(foreach, foreach, "%dopar%")
 importFrom(dplyr, "%>%")

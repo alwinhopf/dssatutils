@@ -143,3 +143,37 @@ def test_audit_weather_quality_flags_suspicious_rows(tmp_path):
 
     assert "tmin_gt_tmax" in set(audit["issue"])
     assert "RAIN_flatline" in set(audit["issue"])
+
+
+def test_all_repairs_preserve_adjacent_full_width_wind(tmp_path):
+    import shutil
+    from dssatutils.weather_repair import _parse_wth, repair_weather_file_missing_values
+    wth = tmp_path / "wind.WTH"
+    shutil.copyfile(ROOT / "tests/fixtures/weather_adjacent_wind.txt", wth)
+    wth.write_text("\n".join(line + "  " for line in wth.read_text().splitlines()) + "\n")
+    dat = _parse_wth(wth)[3]
+    assert len(dat) == 7
+    assert dat["WIND"].tolist() == [1062.7] * 7
+    repair_weather_file_missing_values(wth)
+    repair_weather_file_temperature_inversions(wth, method="swap")
+    # Force the date-gap writer to run as well as the value/inversion writers.
+    wth.write_text("\n".join(line for line in wth.read_text().splitlines()
+                             if not line.startswith("1984004")) + "\n")
+    gap = repair_weather_file_date_gaps(wth)
+    assert int(gap.iloc[0]["repaired_count"]) == 1
+    audit_weather_file_quality(wth)
+    dat = _parse_wth(wth)[3]
+    assert len(dat) == 7
+    assert dat["WIND"].tolist() == [1063.0] * 7
+    assert dat["RH2M"].tolist() == [76.9] * 7
+    assert dat.iloc[3]["RAIN"] == 1.7
+    assert dat.iloc[2]["TMAX"] == 19.0
+    assert dat.iloc[0]["TMAX"] == 0.04
+    assert dat.iloc[0]["TMIN"] == 0.01
+
+
+def test_malformed_weather_row_is_not_silently_dropped():
+    import pytest
+    from dssatutils.weather_repair import _parse_daily_rows
+    with pytest.raises(ValueError, match="Malformed"):
+        _parse_daily_rows(["1984001 broken"])

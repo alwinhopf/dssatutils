@@ -103,7 +103,7 @@ def test_wth_writer_synthetic():
             f"first DATE token wrong: {data[0][:7].strip()!r}"
         assert "nan" not in "".join(data).lower(), "NaN found in data block"
         assert "OPEN-METEO ERA5-SEAMLESS" in lines[0]
-        assert float(data[0].split()[-1]) == 2.2
+        assert float(data[0].split()[-1]) == 193.9
 
 
 def test_gridmet_amp_matches_dssat_definition():
