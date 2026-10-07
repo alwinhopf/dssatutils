@@ -403,3 +403,32 @@ changes; local macOS validation does not establish hosted Windows/Linux success.
 
 The combined October 6 results and hosted-CI limits are recorded in
 [the monorepo validation report](../cropmodel/WEATHER_SOIL_PORTABILITY_VALIDATION.md).
+
+## PRISM point downloads and cache integrity
+
+`process_weather_prism(..., backend="acis")` is the default in both languages.
+It requests PRISM daily maximum/minimum temperature in degrees C and precipitation
+in mm from RCC ACIS GridData (grid 21). `backend="nacse"` retains the CONUS raster
+reader and requires `prism_cache_dir`. ACIS does not retrieve dewpoint, humidity
+or wind; those optional columns remain -99. Solar radiation retains the existing
+Bristow-Campbell estimate; `srad_method="none"` disables that estimate.
+
+ACIS cache entries under `<prism_cache_dir>/acis/` use the actual four-decimal
+request coordinates, grid, dates and version, with matching elements/units recorded
+inside the JSON. Changing point IDs can reuse the same location; moving a point
+cannot reuse its former forcing. Legacy ID-only caches without request metadata
+are preserved but not trusted: this version requests fresh data rather than
+assuming their coordinates or units. Complete validated entries are reusable
+offline; incomplete, empty, mismatched or malformed entries are retried.
+
+Exact ordered daily coverage and finite observed TMAX/TMIN/RAIN are required.
+Trace precipitation (`T`) becomes zero; missing temperatures or precipitation
+block caching/publication rather than dropping days or publishing missing core
+forcing. Requests end on December 31 or today minus two days, whichever is earlier.
+Cache and weather files are staged and atomically published; unsuccessful points
+are logged and existing weather files are preserved. Existing invalid WTH files
+are not automatically repaired; validate/rebuild them before a model run.
+
+R/Python parity note: cache schema, acceptance checks, units and WTH behavior are
+mirrored and tested with shared offline fixtures and cross-language cache replay.
+R processes points sequentially; Python uses up to four threads when `n_cores > 1`.

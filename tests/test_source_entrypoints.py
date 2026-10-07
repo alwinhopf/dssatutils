@@ -400,9 +400,26 @@ def test_process_weather_prism_entrypoint(tmp_path):
         process_weather_prism(
             POINTS, YEAR, YEAR, str(out_dir), "ID", "LAT", "LONG", 1,
             str(tmp_path / "prism.log"), str(tmp_path / "prism_cache"),
+            backend="nacse",
         )
     _assert_wth(out_dir / "SRC1.WTH")
     assert "SRAD estimated: Bristow-Campbell 1984" in (out_dir / "SRC1.WTH").read_text()
+
+
+def test_process_weather_prism_acis_entrypoint(tmp_path):
+    from dssatutils import process_weather_prism
+
+    dates = _dates()
+    raw_acis = [[d.strftime("%Y-%m-%d"), 25.0, 12.0, 2.0] for d in dates]
+    with patch("dssatutils.weather_prism._fetch_acis_point", return_value=raw_acis):
+        out_dir = tmp_path / "wth_acis"
+        process_weather_prism(
+            POINTS, YEAR, YEAR, str(out_dir), "ID", "LAT", "LONG", 1,
+            str(tmp_path / "prism_acis.log"), str(tmp_path / "prism_cache"),
+        )
+    _assert_wth(out_dir / "SRC1.WTH")
+    assert "SRAD estimated: Bristow-Campbell 1984" in (out_dir / "SRC1.WTH").read_text()
+
 
 
 HYBRID_RAIN_WEATHER = [

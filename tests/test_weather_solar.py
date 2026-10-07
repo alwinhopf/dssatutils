@@ -127,6 +127,7 @@ def test_process_weather_prism_srad_method(tmp_path):
             points_gdf, 2020, 2020, str(out_bc), "ID", "LAT", "LONG", 1,
             str(tmp_path / "prism_bc.log"), str(tmp_path / "cache"),
             srad_method="bristow_campbell",
+            backend="nacse",
         )
         wth_bc_text = (out_bc / "P1.WTH").read_text()
         assert "SRAD estimated: Bristow-Campbell 1984" in wth_bc_text
@@ -142,6 +143,7 @@ def test_process_weather_prism_srad_method(tmp_path):
             points_gdf, 2020, 2020, str(out_none), "ID", "LAT", "LONG", 1,
             str(tmp_path / "prism_none.log"), str(tmp_path / "cache"),
             srad_method="none",
+            backend="nacse",
         )
         wth_none_text = (out_none / "P1.WTH").read_text()
         assert "SRAD estimated" not in wth_none_text
